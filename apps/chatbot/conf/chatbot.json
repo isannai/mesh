@@ -1,0 +1,16 @@
+{
+  "telegram": {
+    "token": "",
+    "thinking_animation": "",
+    "thinking_sticker": ""
+  },
+  "ai": {
+    "endpoint": "http://127.0.0.1:8443/internal/api/agent/run",
+    "engine": "llama",
+    "preset": "default",
+    "node_id": "default",
+    "max_turns": 4,
+    "credential": "",
+    "timeout": "30s"
+  }
+}

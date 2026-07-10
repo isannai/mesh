@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/daesob/http3proxy v0.0.0-00010101000000-000000000000
 	github.com/ethereum/go-ethereum v1.14.12
+	github.com/go-telegram/bot v1.22.0
 	github.com/quic-go/quic-go v0.48.2
 )
 

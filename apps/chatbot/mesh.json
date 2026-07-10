@@ -1,0 +1,16 @@
+{
+  "spec_version": "1",
+  "name": "chatbot",
+  "version": "0.1.0",
+  "author": "isann",
+  "description": "Telegram chatbot bridge (calls isannd /internal/api/agent/run)",
+  "bin": "bin/chatbot",
+  "args": ["-config", "conf/chatbot.json"],
+  "config": {
+    "path": "secrets.json",
+    "env": [
+      { "key": "TELEGRAM_BOT_TOKEN", "required": true, "secret": true, "desc": "@BotFather bot token" },
+      { "key": "AI_CREDENTIAL", "required": false, "secret": true, "desc": "BASE64 EOA-signed access credential (optional until auth wired)" }
+    ]
+  }
+}

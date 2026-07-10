@@ -4,11 +4,12 @@ setlocal
 REM ===========================================================================
 REM  build\windows\mesh.bat  <version>
 REM
-REM  iSANN Mesh app build (Windows). Self-contained zip under
+REM  iSANN Mesh app build (Windows). Self-contained zips under
 REM  build\windows\out-mesh\ :
 REM    station-windows-amd64.zip  mesh.json + bin\station.exe + conf\station.json
+REM    chatbot-windows-amd64.zip  mesh.json + bin\chatbot.exe + conf\config.example.json + public\
 REM
-REM  (control / chatbot blocks are added as those apps land in this repo.)
+REM  (control block is added as that app lands in this repo.)
 REM  Version via ldflags. REQUIRED.
 REM    usage:  build\windows\mesh.bat 0.1.1
 REM ===========================================================================
@@ -39,7 +40,7 @@ mkdir "%OUT%"
 echo === iSANN mesh build   v%VER%   (windows/amd64) ===
 echo.
 
-echo [1/1] station (mesh, zip)...
+echo [1/2] station (mesh, zip)...
 set "STN=%OUT%\station"
 mkdir "%STN%\bin"
 mkdir "%STN%\conf"
@@ -52,10 +53,29 @@ if errorlevel 1 goto :error
 powershell -NoProfile -Command "Compress-Archive -Path '%STN%\*' -DestinationPath '%OUT%\station-windows-amd64.zip' -Force"
 if errorlevel 1 goto :error
 
+echo [2/2] chatbot (mesh, zip)...
+set "CBT=%OUT%\chatbot"
+mkdir "%CBT%\bin"
+go build -ldflags "-s -w" -o "%CBT%\bin\chatbot.exe" ./cmd/chatbot/
+if errorlevel 1 goto :error
+xcopy /E /I /Y /Q "apps\chatbot\conf" "%CBT%\conf" >nul
+if errorlevel 1 goto :error
+copy /Y "apps\chatbot\mesh.json" "%CBT%\" >nul
+if errorlevel 1 goto :error
+xcopy /E /I /Y /Q "apps\chatbot\public" "%CBT%\public" >nul
+if errorlevel 1 goto :error
+copy /Y "apps\chatbot\README.md" "%CBT%\" >nul
+if errorlevel 1 goto :error
+xcopy /E /I /Y /Q "apps\chatbot\docs" "%CBT%\docs" >nul
+if errorlevel 1 goto :error
+powershell -NoProfile -Command "Compress-Archive -Path '%CBT%\*' -DestinationPath '%OUT%\chatbot-windows-amd64.zip' -Force"
+if errorlevel 1 goto :error
+
 echo.
 echo ===========================================================================
 echo  mesh build complete   v%VER%   at   %OUT%\
 echo    station-windows-amd64.zip  (mesh + bin + conf)
+echo    chatbot-windows-amd64.zip  (mesh + bin + conf + docs + public)
 echo ===========================================================================
 goto :end
 
