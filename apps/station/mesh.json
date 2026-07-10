@@ -1,0 +1,14 @@
+{
+  "spec_version": "1",
+  "name": "station",
+  "version": "0.1.0",
+  "author": "isann",
+  "description": "inference station",
+  "bin": "bin/station",
+  "args": ["-config", "conf/station.json"],
+  "isannd": {
+    "servers": {
+      "7443": { "role": "station", "proxy_pass": "http://127.0.0.1:8090" }
+    }
+  }
+}
