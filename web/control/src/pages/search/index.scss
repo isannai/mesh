@@ -1,0 +1,1372 @@
+// Search results page — based on docs/TODO/search page/search-results-mockup.html.
+// Uses theme variables so light/dark modes both render correctly. Where the
+// mockup's accent colors don't map cleanly, we pick the closest theme var
+// (mockup is dark-only).
+
+.search-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  max-width: 1280px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+// In-Install-modal progress section — sits below Compatibility check inside
+// the Install phase. Shows live SSE-driven percent for the active install,
+// or partial-on-disk percent (resume hint) for the currently selected node
+// when no live job is in flight. Container matches the .compat-box visual
+// language so the two sections read as a stack of "what we know about
+// this target node right now".
+.install-modal-progress {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  padding: 12px;
+  border-radius: 6px;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  // Resume hint variant (partial-on-disk, no active job): use a softer
+  // warm tone so it reads as informational, not in-progress.
+  &.install-modal-progress-partial {
+    border-color: rgba(240, 168, 58, 0.4);
+    background: rgba(240, 168, 58, 0.06);
+  }
+}
+.install-modal-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.install-modal-progress-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.install-modal-progress-status {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.install-modal-progress-bar {
+  background: var(--bg-card);
+  border-radius: var(--badge-radius);
+  height: 8px;
+  overflow: hidden;
+}
+.install-modal-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-primary), #a371f7);
+  transition: width 0.25s linear;
+}
+.install-modal-progress-file {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.install-modal-progress-error {
+  font-size: 11px;
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+  padding: 4px 8px;
+  border-radius: var(--badge-radius);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Mini search bar at the top of the search page (separate from header
+// search button — this one is right above the results so users can edit
+// the query without scrolling up). Mockup style: white-ish input with a
+// blue submit button.
+.search-mini-row { display: flex; flex-direction: column; }
+
+/* Civitai usage hint — sits below the search bar. Civitai's public API
+   only matches model names so we redirect users to civitai.com for the
+   real search, then have them paste the resulting hash here. */
+.search-civitai-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 6px 10px 0 14px;
+  line-height: 1.5;
+
+  a {
+    color: var(--color-primary);
+    text-decoration: none;
+    &:hover { text-decoration: underline; }
+  }
+}
+
+.search-mini {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+
+  &:focus-within {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-primary-alpha);
+  }
+}
+
+.search-mini-input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 8px 4px;
+
+  &::placeholder { color: var(--text-muted); }
+}
+
+.search-mini-clear {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 6px;
+  font-size: 16px;
+  &:hover { color: var(--text-primary); }
+}
+
+.search-mini-submit {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-primary);
+  color: white;
+  border: 0;
+  border-radius: var(--badge-radius);
+  cursor: pointer;
+  &:hover:not(:disabled) { background: var(--color-primary-hover); }
+  &:disabled {
+    background: var(--bg-disabled);
+    color: var(--text-muted);
+    cursor: not-allowed;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Search meta — detection chip + filter chip groups
+.search-meta {
+  background: var(--bg-card);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detection-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.detect-chip {
+  background: var(--color-primary);
+  color: white;
+  padding: 4px 10px;
+  border-radius: var(--badge-radius);
+  font-size: 12px;
+  font-weight: 600;
+
+  &.ghost { background: var(--bg-input-alt); color: var(--text-muted); }
+  &.detect-hash    { background: var(--color-purple); }
+  &.detect-address { background: var(--color-primary); }
+  &.detect-node    { background: var(--color-success); }
+  &.detect-gpu,
+  &.detect-engine  { background: var(--color-warning-dark); }
+}
+
+.detect-confidence {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--color-success);
+  padding: 4px 8px;
+  border-radius: var(--badge-radius);
+  font-size: 11px;
+}
+
+.detect-norm {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.filter-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filter-group-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  min-width: 70px;
+}
+
+.filter-chip {
+  background: var(--bg-input-alt);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  padding: 5px 14px;
+  border-radius: var(--badge-radius);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+
+  &:hover:not(:disabled) {
+    border-color: var(--color-primary);
+    color: var(--text-primary);
+  }
+}
+
+// Fixed-width slot for the ✓ mark. Always rendered so the chip width
+// stays stable; opacity dims when the chip is inactive.
+.filter-chip-mark {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+
+.filter-chip-active {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+  .filter-chip-mark { opacity: 1; }
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    color: white;
+  }
+}
+
+// Disabled chips (e.g. ModelScope coming soon) keep the mark slot but
+// hide the glyph entirely so it doesn't read as "off but selectable".
+.filter-chip-disabled .filter-chip-mark { visibility: hidden; }
+
+.filter-chip-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Result section
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.result-title {
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.count-badge {
+  background: var(--color-primary);
+  color: white;
+  padding: 2px 10px;
+  border-radius: var(--badge-radius);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.result-sort-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.result-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.result-error {
+  color: var(--color-danger);
+  font-size: 13px;
+  padding: 8px 12px;
+  background: var(--color-danger-bg);
+  border-radius: var(--badge-radius);
+  margin-bottom: 8px;
+}
+
+.result-warning {
+  color: var(--color-warning-dark);
+  font-size: 12px;
+  padding: 6px 12px;
+  margin-bottom: 6px;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Result card — 3-column grid: status | content | action button
+.result-card {
+  background: var(--bg-input-alt);
+  border: 1px solid var(--border-light);
+  border-radius: var(--card-radius);
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.15s;
+
+  &:hover {
+    border-color: var(--color-primary);
+    background: var(--bg-hover);
+  }
+
+  &.you {
+    border-color: var(--color-purple);
+    background: var(--bg-selected);
+    &:hover { border-color: var(--color-purple-dark); }
+  }
+
+  &.installed {
+    border-color: var(--color-success);
+  }
+}
+
+// Catalog card variant — 3-column layout (install button | body | actions).
+// Used by HF/Civitai search results. Differs from running-node cards by
+// having a big square Install button on the left and small action buttons
+// (download / inspect) on the right.
+.result-card.catalog {
+  align-items: stretch;
+  padding: 0;
+
+  .card-body {
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+  }
+}
+
+// Big square Install button — replaces the 16px status-dot icon for
+// catalog cards. Acts as the primary install action AND the visual icon
+// for the model type (LLM=📦, SD=🖼️, SDXL=🎨, voice=🎤).
+.install-btn-square {
+  flex: 0 0 96px;
+  width: 96px;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: linear-gradient(135deg, var(--bg-card-header) 0%, var(--bg-input-alt) 100%);
+  border: 0;
+  border-right: 1px solid var(--border-light);
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+  color: var(--text-primary);
+
+  &:hover {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+    box-shadow: inset 0 0 20px rgba(255,255,255,0.1);
+    color: white;
+  }
+
+  &.installed {
+    background: linear-gradient(135deg, rgba(0, 184, 148, 0.25) 0%, rgba(0, 184, 148, 0.12) 100%);
+    border-right-color: rgba(0, 184, 148, 0.3);
+
+    .install-btn-icon { color: var(--color-success); }
+
+    &:hover {
+      background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-dark) 100%);
+      .install-btn-icon { color: white; }
+    }
+  }
+}
+
+.install-btn-icon {
+  font-size: 42px;
+  line-height: 1;
+}
+
+// Right-side action buttons (Download / Inspect). Small icon buttons
+// separated by a vertical border from the card-body.
+.card-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-left: 1px solid var(--border-light);
+}
+
+.icon-btn {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+
+  &:hover {
+    background: var(--color-primary-alpha);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+// Mobile reflow — stack vertically when narrow.
+@media (max-width: 640px) {
+  .result-card.catalog {
+    flex-direction: column;
+  }
+  .install-btn-square {
+    flex: 0 0 auto;
+    width: 100%;
+    height: 64px;
+    flex-direction: row;
+    gap: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-light);
+    .install-btn-icon { font-size: 32px; }
+  }
+  .card-actions {
+    border-left: 0;
+    border-top: 1px solid var(--border-light);
+    padding: 10px 14px;
+    justify-content: flex-end;
+  }
+}
+
+.status-dot {
+  font-size: 16px;
+  text-align: center;
+}
+
+// Reuses .node-card-emblem (aspect-ratio 2/3 portrait) defined in
+// styles/index.scss. Pinned to the left side, fills full card height.
+// Width is fixed at 80px so the card-body never collides with it; the
+// emblem image inside scales 2:3 within that 80px column.
+.card-emblem {
+  position: relative;
+  flex-shrink: 0;
+  align-self: stretch;
+  width: 80px;
+  display: flex;
+  align-items: stretch;
+
+  .node-card-emblem {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+
+.card-body {
+  min-width: 0;
+  flex: 1;
+  padding: 14px;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// NodeCard split layout (search results) — left static (2), right metrics (1).
+// "What is this node?" on the left, "How busy is it now?" on the right.
+.card-static {
+  flex: 2;
+  min-width: 0;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-metrics {
+  flex: 1;
+  min-width: 140px;
+  padding: 14px;
+  // Same surface as the static column — the previous --bg-card variant
+  // looked like a different panel pasted in.
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  // Top-aligned so the Pending row sits at the top of the column rather
+  // than vertically centered, matching the static column's reading flow.
+  justify-content: flex-start;
+  gap: 6px;
+  // Divider line between static and metrics columns. Drawn as ::before
+  // (not border-left) so we can inset it from top/bottom instead of
+  // stretching to the card edges, which was visually heavy.
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 14px;
+    bottom: 14px;
+    width: 1px;
+    background: var(--text-muted);
+    opacity: 0.4;
+  }
+}
+
+.card-metrics-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.card-metrics-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.card-metrics-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+// TPM badge pinned to the bottom of the metrics column — pushed down
+// with margin-top:auto so it stays anchored regardless of how many
+// metric rows render above it.
+.card-metrics-tpm {
+  margin-top: auto;
+  padding-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+// Badge row beneath the model line (RTX / ctx / you / TPM).
+// flex-wrap so a long TPM issuer string can drop to a second line on narrow
+// cards instead of overflowing the static column.
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+// id-only row at the top of the static column. Originally id + chips were
+// on one line; now chips moved into the badge row, so this is just the id.
+.card-id-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+// TPM badge — two visual states matching the verification stage.
+//   .tpm         → green ✓, RV challenge passed (full attestation)
+//   .tpm-pending → gray, EK cert received but challenge not yet completed
+.match-reason.tpm {
+  background: rgba(0, 184, 148, 0.18);
+  color: var(--color-success);
+  font-weight: 600;
+  text-transform: none;
+}
+
+.match-reason.tpm-pending {
+  background: rgba(139, 148, 158, 0.18);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: none;
+}
+
+// Ctx-size badge stays purple (matches /nodes list page convention).
+.card-chip-ctx {
+  background: rgba(108, 92, 231, 0.10);
+  font-weight: 600;
+}
+
+// Badges row for catalog cards — kind / baseModel / shard / installed-tag
+// chips. Kept on a row below the title so a long model name doesn't push
+// these into a wrap and so the title row stays clean (name + source only).
+.card-badges-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 4px;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Inspect modal — opened from the ⓘ button on each catalog card. Shows
+// frontend-derivable detail (Overview / Service inference / Files /
+// Install target / Warnings). Backend-only fields (provider compatibility,
+// existing profile state) are deliberately excluded.
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 32px;
+  cursor: pointer; // backdrop click closes
+}
+
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 720px;
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  cursor: default;
+  animation: modal-in 0.18s ease-out;
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 0;
+  span:nth-child(2) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+.modal-title-icon { font-size: 20px; }
+.modal-close {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  flex-shrink: 0;
+  &:hover {
+    background: var(--color-danger-bg);
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+  }
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+// Modal-scoped button overrides — these used to leak globally (no parent
+// selector) and gave .btn an 8px radius / extra padding everywhere a search
+// page had been visited. Confined to .modal so other pages' .btn keeps the
+// app-wide DataTable defaults (radius 4, height 32).
+.modal {
+  .btn {
+    padding: 8px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+    &[disabled] { opacity: 0.4; cursor: not-allowed; }
+  }
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: var(--border-input);
+    &:hover:not([disabled]) {
+      border-color: var(--color-primary);
+      color: var(--text-primary);
+    }
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+    color: white;
+    font-weight: 700;
+    &:hover:not([disabled]) { filter: brightness(1.1); }
+  }
+}
+
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 16px 0 8px;
+}
+.section-title:first-child { margin-top: 0; }
+
+.kv-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.kv-key {
+  flex: 0 0 130px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.kv-val {
+  flex: 1;
+  color: var(--text-primary);
+  word-break: break-all;
+  a { color: var(--color-primary); text-decoration: none; &:hover { text-decoration: underline; } }
+  code { background: var(--bg-input); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--color-primary); }
+  strong { font-weight: 600; }
+}
+.kv-hint { color: var(--text-muted); font-size: 11px; font-style: italic; }
+.kv-muted { color: var(--text-muted); font-size: 12px; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-ok      { background: rgba(0, 184, 148, 0.18); color: var(--color-success); }
+.badge-warn    { background: rgba(240, 168, 58, 0.18); color: var(--color-warning-dark); }
+.badge-broken  { background: rgba(232, 100, 76, 0.18); color: var(--color-danger); }
+.badge-info    { background: var(--color-primary-alpha); color: var(--color-primary); }
+.badge-license { background: rgba(139, 148, 158, 0.18); color: var(--text-secondary); }
+.badge-hf      { background: rgba(255, 210, 30, 0.22); color: #ffd21e; }
+.badge-civitai { background: rgba(240, 168, 58, 0.22); color: var(--color-warning-dark); }
+
+// Install-phase node picker — radio rows that the user picks one of as the
+// install target. Disabled rows (offline / unauthed) stay visible so the
+// user can see the full inventory and act on it (Authenticate button).
+.target-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.target-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  // #a371f7 is the existing accent purple used in welcome/docs/models —
+  // reuse it here so selection has its own visual identity, distinct from
+  // the page's primary blue (which other selected/active states use).
+  input[type="radio"], input[type="checkbox"] {
+    accent-color: #a371f7;
+  }
+  &:hover:not(.target-option-disabled) {
+    border-color: #a371f7;
+  }
+}
+.target-option-selected {
+  background: rgba(163, 113, 247, 0.10);
+  border-color: #a371f7;
+  border-width: 2px;
+  padding: 11px;  // compensate for thicker border
+}
+.target-option-disabled {
+  cursor: not-allowed;
+  // When the row is unselectable (offline / unauthed) we drop the saturated
+  // colour and shift everything to a neutral grey palette so the GPU chip
+  // and inline badges read as muted info, not actionable status. The
+  // `.badge` rule overrides per-variant colours (-ok / -warn) for this
+  // specific row only.
+  .card-chip,
+  .badge {
+    background: rgba(139, 148, 158, 0.15) !important;
+    color: var(--text-muted) !important;
+    border-color: transparent !important;
+  }
+  .card-id,
+  .target-option-meta {
+    color: var(--text-muted);
+  }
+}
+.target-option-body { flex: 1; min-width: 0; }
+.target-option-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  .card-id {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+}
+// Sub-label rendered directly below the proxy ID — operator-set
+// alias (preferred) or RV-reported "ip:port" so the row is
+// recognizable without decoding 0x… ids.
+.target-option-sublabel {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.target-option-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+// Compatibility check placeholder — full VRAM/engine/disk checks are a
+// follow-up; for now we ship the box with a "coming soon" line plus the
+// hash provenance assurance.
+.compat-box {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.compat-box-title {
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+// Subtle informational note inside the compat box — the import
+// caveat about sharded models. Slightly dimmed so it reads as
+// supplementary context rather than another verified check.
+.compat-box-note {
+  font-size: 11.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.85;
+  line-height: 1.4;
+  code {
+    font-family: var(--font-mono, monospace);
+    font-size: 10.5px;
+    background: rgba(139, 148, 158, 0.16);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+}
+
+// Inline link-styled action button — used inside .target-option-title to
+// trigger Authenticate without opening a separate page.
+.btn-link {
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  &:hover:not([disabled]) { background: var(--color-primary-alpha); }
+  &[disabled] { opacity: 0.5; cursor: not-allowed; }
+}
+
+.file-list {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.file-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 130px 32px;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  border-bottom: 1px solid var(--border-light);
+  align-items: center;
+  &:last-child { border-bottom: 0; }
+  &.is-header {
+    background: var(--bg-card-header);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  &.is-primary { background: var(--color-primary-alpha); }
+}
+.file-name { color: var(--text-primary); word-break: break-all; }
+.file-size { color: var(--color-primary); font-weight: 600; text-align: right; }
+.file-hash { color: var(--text-muted); }
+.file-copy {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  &:hover { background: var(--color-primary-alpha); border-color: var(--color-primary); color: var(--color-primary); }
+}
+
+.primary-marker {
+  background: var(--color-primary-alpha);
+  color: var(--color-primary);
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.warn-list { display: flex; flex-direction: column; gap: 6px; }
+.warn-item {
+  background: rgba(240, 168, 58, 0.08);
+  border-left: 3px solid var(--color-warning-dark);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--color-warning-dark);
+  border-radius: 4px;
+  &.error {
+    background: var(--color-danger-bg);
+    border-left-color: var(--color-danger);
+    color: var(--color-danger);
+  }
+}
+
+@media (max-width: 720px) {
+  .modal-backdrop { padding: 0; }
+  .modal { max-width: none; max-height: none; height: 100vh; border-radius: 0; }
+  .file-row { grid-template-columns: 1fr 80px 90px 32px; }
+}
+
+// Loading skeletons for search sections. Cards keep their real layout
+// (same grid, padding, sizing) so swapping real cards in doesn't shift
+// the page. Inner shimmer bars use a 1.4s linear-gradient sweep.
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-card {
+  cursor: default;
+  &:hover { border-color: var(--border-light); transform: none; }
+}
+
+.skeleton-bar,
+.skeleton-block {
+  display: inline-block;
+  vertical-align: middle;
+  background: linear-gradient(
+    90deg,
+    var(--bg-card-header) 0%,
+    var(--border-input) 50%,
+    var(--bg-card-header) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s linear infinite;
+  border-radius: 4px;
+}
+
+.skeleton-bar {
+  height: 12px;
+  min-width: 30px;
+
+  // Width modifiers — percentage (relative to parent container).
+  &.w-30p { width: 30%; }
+  &.w-40p { width: 40%; }
+  &.w-45p { width: 45%; }
+  &.w-50p { width: 50%; }
+  &.w-55p { width: 55%; }
+  &.w-60p { width: 60%; }
+  &.w-65p { width: 65%; }
+  &.w-70p { width: 70%; }
+  &.w-80p { width: 80%; }
+
+  // Width modifiers — fixed px (chip-sized placeholders inside flex rows).
+  &.w-30 { width: 30px; }
+  &.w-32 { width: 32px; }
+  &.w-40 { width: 40px; }
+  &.w-50 { width: 50px; }
+  &.w-60 { width: 60px; }
+  &.w-70 { width: 70px; }
+  &.w-80 { width: 80px; }
+  &.w-100 { width: 100px; }
+
+  // Square chip variant — 32×32, used for action button skeletons.
+  &.sq-32 { width: 32px; height: 32px; }
+}
+
+// Skeleton variant of install-btn-square / card-emblem — fills the column.
+.install-btn-square.skeleton-block,
+.card-emblem.skeleton-block {
+  border-radius: 0;
+  align-self: stretch;
+}
+
+// Inline copy button next to the truncated sha256. Hover reveals primary
+// color; click flashes a check mark for ~1s while the full hash sits in
+// the clipboard.
+.hash-copy-btn {
+  margin-left: 4px;
+  padding: 1px 5px;
+  background: transparent;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.12s;
+  vertical-align: middle;
+
+  &:hover {
+    background: var(--color-primary-alpha);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+// On narrow viewports the metrics column collapses below the static one
+// instead of squeezing into a too-thin sliver.
+@media (max-width: 720px) {
+  .result-card { flex-wrap: wrap; }
+  .card-metrics {
+    flex: 1 0 100%;
+    border-left: 0;
+    border-top: 1px solid var(--border-light);
+    flex-direction: row;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+  }
+  .card-metrics-row { flex: 1 1 calc(50% - 6px); }
+}
+
+.card-title-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.card-id {
+  font-weight: 600;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--color-primary);
+  font-size: 14px;
+}
+
+// Badges: borderless. With borders previously, the border color differed
+// per state (purple "you", default for chips) so identical-content badges
+// rendered at slightly different visual weights. Solid background only
+// keeps every badge the same height + same outline weight.
+.card-chip {
+  background: var(--bg-card-header);
+  padding: 3px 10px;
+  border-radius: var(--badge-radius);
+  font-size: 11px;
+  color: var(--color-purple);
+  border: 0;
+  font-weight: 600;
+
+  // Source chips — HuggingFace yellow (brand colour), Civitai warm orange.
+  // Both saturated enough that the operator can spot the source at a glance
+  // when scrolling a long mixed result list.
+  // Default `.card-chip` (no source modifier) → HuggingFace styling.
+  background: rgba(255, 210, 30, 0.22);
+  color: #ffd21e;
+
+  &.civitai {
+    background: rgba(240, 168, 58, 0.22);
+    color: var(--color-warning-dark);
+  }
+
+  // Kind / baseModel chips (e.g. "SDXL 1.0", "transformers", "lora")
+  // — use the primary blue so they read as informational.
+  &.kind {
+    background: var(--color-primary-alpha);
+    color: var(--color-primary);
+  }
+
+  // Shard count chip — soft red to signal "multi-file, larger setup".
+  &.shard {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+  }
+
+  // Installed tag — green check, mirrors `.match-reason.installed`.
+  &.installed-tag {
+    background: rgba(0, 184, 148, 0.18);
+    color: var(--color-success);
+    font-weight: 600;
+  }
+
+  // Partial-install tag — same shape as installed-tag but warm yellow
+  // to signal "some but not all nodes". Operators read color first
+  // (green = done, yellow = action needed) then check the count.
+  &.installed-partial-tag {
+    background: rgba(240, 168, 58, 0.18);
+    color: var(--color-warning-dark);
+    font-weight: 600;
+  }
+
+  // Broken tag — orange/red to signal "files are missing on N nodes,
+  // reinstall needed". Coexists with installed/partial tags when some
+  // nodes are healthy and others aren't.
+  &.broken-tag {
+    background: rgba(232, 100, 76, 0.18);
+    color: var(--color-danger);
+    font-weight: 600;
+  }
+
+  // License chip — neutral grey so it reads as a metadata tag, distinct
+  // from the colorful kind / baseModel / shard chips.
+  &.license {
+    background: rgba(139, 148, 158, 0.18);
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-transform: none;
+  }
+}
+
+.match-reason {
+  background: var(--bg-card-header);
+  color: var(--color-purple);
+  padding: 3px 10px;
+  border-radius: var(--badge-radius);
+  font-size: 11px;
+  border: 0;
+  text-transform: lowercase;
+
+  &.installed {
+    background: rgba(0, 184, 148, 0.18);
+    color: var(--color-success);
+  }
+
+  &.you {
+    background: rgba(108, 92, 231, 0.22);
+    color: var(--color-purple);
+    font-weight: 600;
+  }
+
+  &.warning {
+    background: rgba(253, 203, 110, 0.22);
+    color: var(--color-warning-dark);
+  }
+
+  &.error {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+  }
+}
+
+.card-info-row {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 4px 0;
+}
+
+.engine-label {
+  color: var(--color-warning-dark);
+  font-weight: 500;
+}
+
+.model-label {
+  color: var(--color-primary);
+}
+
+.card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+
+  strong { color: var(--text-primary); font-weight: 500; }
+}
+
+.card-owner-row {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}
+
+.card-stats-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.stat-pending {
+  color: var(--text-secondary);
+}
+
+.stat-done {
+  color: var(--text-muted);
+}
+
+.card-tpm-row {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-success);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tpm-check {
+  font-weight: 700;
+  color: var(--color-success);
+}
+
+.tpm-text {
+  color: var(--text-muted);
+}
+
+.owner {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.stars {
+  color: var(--color-warning-dark);
+  font-size: 11px;
+}
+
+// (Removed: orphan `.btn` / `.btn-test` / `.btn-use` / `.btn-install` block.
+//  These classes have no JSX users — the rules just leaked globally and
+//  overrode .btn radius / border across other pages. The current search
+//  card actions use scoped class names like .install-btn elsewhere.)
+
+// ─────────────────────────────────────────────────────────────────────
+// Hints panel
+.search-hints {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 24px 28px;
+
+  h3 {
+    margin: 0 0 12px 0;
+    font-size: 15px;
+    color: var(--text-primary);
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    line-height: 1.8;
+
+    strong { color: var(--text-primary); }
+  }
+}

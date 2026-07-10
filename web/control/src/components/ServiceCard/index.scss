@@ -1,0 +1,336 @@
+/* === Service Card helpers === */
+.svc-dep.clickable { cursor: pointer; }
+.svc-detail-label.hash-gap { margin-top: 4px; }
+.btn-stop-small { font-size: 0.7rem; padding: 2px 10px; }
+.btn-kill-all-danger {
+  font-size: 0.7rem;
+  padding: 2px 12px;
+  background: var(--color-danger);
+  color: #fff;
+  border-color: var(--color-danger);
+}
+.btn-disabled-dim {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-danger-outline {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+.svc-card-disabled { pointer-events: none; }
+
+/* === Service Card === */
+.svc-card {
+  padding: 16px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-dropdown);
+  box-shadow: 0 1px 3px var(--shadow-sm);
+}
+
+.svc-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.svc-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.svc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+// State modifiers — applied to both `.svc-card` (borderColor) and `.svc-dot`
+// (background) so the card frame and the dot read as one signal. Five states
+// collapse to two colors visually (success / warning) — the names keep the
+// original semantics so jsx call sites read naturally.
+.svc-card.is-running   { border-color: var(--color-success); }
+.svc-card.is-loading   { border-color: var(--color-warning); }
+.svc-card.is-zombie    { border-color: var(--color-warning); }
+.svc-card.is-stopping  { border-color: var(--color-warning); }
+.svc-card.is-starting  { border-color: var(--color-warning); }
+
+.svc-dot.is-running    { background: var(--color-success); }
+.svc-dot.is-loading    { background: var(--color-warning); }
+.svc-dot.is-zombie     { background: var(--color-warning); }
+.svc-dot.is-stopping   { background: var(--color-warning); }
+.svc-dot.is-starting   { background: var(--color-warning); }
+
+.svc-name {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.svc-status-text {
+  font-size: 0.78rem;
+  font-weight: 500;
+  &.warning { color: var(--color-warning); }
+}
+
+.svc-dep {
+  font-size: 0.75rem;
+  margin-bottom: 2px;
+  padding-left: 18px;
+  &.success { color: var(--color-success); }
+  &.danger { color: var(--color-danger); }
+  &.primary { color: var(--color-primary); margin-bottom: 4px; }
+}
+
+.svc-loading {
+  padding: 8px 0;
+}
+
+.svc-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--border-medium);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.svc-progress-fill {
+  height: 100%;
+  background: var(--color-warning);
+  border-radius: 2px;
+  transition: width 0.5s;
+  &.anim { animation: loading 1.5s infinite; }
+}
+
+.svc-loading-text {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: block;
+}
+
+.svc-details {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.svc-detail-label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.svc-detail-value {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.svc-detail-hash {
+  font-family: monospace;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.svc-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
+}
+
+.svc-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* === Process Card === */
+.proc-card {
+  padding: 12px 16px;
+  background: var(--bg-secondary, #141620);
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  box-shadow: 0 1px 3px var(--shadow-sm);
+}
+
+.proc-card-title {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.proc-grid {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 4px 10px;
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.proc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+// Process tristate — running (process is up) / alive (pid present but not
+// running) / stopped (no pid). proc-card border picks up the same warning
+// signal when zombie processes linger.
+.proc-card.is-zombie { border-color: rgba(245, 158, 11, 0.25); }
+.proc-dot.is-running    { background: var(--color-success); }
+.proc-dot.is-alive      { background: var(--color-warning); }
+.proc-status.is-running { color: var(--color-success); }
+.proc-status.is-alive   { color: var(--color-warning); }
+.proc-status.is-stopped { color: var(--text-muted); }
+
+.proc-name {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.proc-indent {
+  color: var(--text-muted);
+  font-family: monospace;
+  font-size: 0.75rem;
+  text-align: right;
+}
+
+.proc-pid {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.proc-status {
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+.proc-kill-all {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+/* === Job Card === */
+.job-card {
+  padding: 10px 16px;
+  background: var(--bg-secondary, #141620);
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  box-shadow: 0 1px 3px var(--shadow-sm);
+}
+
+// Job status — done (green), failed (red), preparing/queued/running (yellow).
+// border-color only when the job is active so completed cards drop back to
+// the neutral border. .job-id and .job-pct inherit the same color.
+.job-card.is-active { border-color: var(--color-warning); }
+.job-card.is-active.is-done { border-color: var(--color-success); }
+.job-card.is-active.is-failed { border-color: var(--color-danger); }
+
+.job-id.is-done   { color: var(--color-success); }
+.job-id.is-failed { color: var(--color-danger); }
+.job-id.is-active { color: var(--color-warning); }
+
+.job-pct.is-done   { color: var(--color-success); }
+.job-pct.is-failed { color: var(--color-danger); }
+.job-pct.is-active { color: var(--color-warning); }
+
+.job-progress-fill.is-done   { background: var(--color-success); }
+.job-progress-fill.is-failed { background: var(--color-danger); }
+.job-progress-fill.is-active { background: var(--color-warning); }
+
+.job-card-title {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+}
+
+.job-id {
+  font-family: monospace;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.job-progress {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--border-medium);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.job-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.5s;
+}
+
+.job-pct {
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.job-cancel {
+  background: none;
+  border: none;
+  color: var(--color-danger);
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0 4px;
+  margin-left: auto;
+}
+
+/* === Card Connector === */
+.card-connector {
+  display: flex;
+  justify-content: center;
+}
+
+.card-connector-line {
+  width: 2px;
+  height: 20px;
+}

@@ -1,0 +1,230 @@
+/* === ServiceList — all prefixed with sl- to avoid conflicts === */
+.sl-list {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  overflow: visible;
+}
+
+.sl-row {
+  display: block;
+  padding: 14px 18px;
+  border-left: 3px solid var(--border-light);
+  position: relative;
+  overflow: visible;
+}
+.sl-row + .sl-row {
+  border-top: 1px solid var(--border-light);
+}
+.sl-row.sl-row-active {
+  background: rgba(74,158,255,0.04);
+  border-left-color: var(--color-success);
+}
+
+.sl-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+}
+.sl-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.85;
+}
+.sl-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sl-name {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.sl-spacer { flex: 1; }
+.sl-status {
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.sl-warn { color: var(--color-warning); }
+
+.sl-ext-note {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-style: italic;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.sl-btn-stop {
+  color: var(--color-danger) !important;
+  border-color: var(--color-danger) !important;
+  min-width: 60px;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+.sl-btn-switch {
+  min-width: 60px;
+  font-size: 0.78rem;
+  background: rgba(74,158,255,0.12);
+  border-color: rgba(74,158,255,0.35);
+  color: var(--color-primary);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.sl-btn-switch:hover:not(:disabled) {
+  background: rgba(74,158,255,0.22);
+}
+
+.sl-dep-line {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-left: 34px;
+  margin-top: 4px;
+}
+.sl-dep {
+  font-size: 0.75rem;
+  color: var(--color-success);
+  white-space: nowrap;
+}
+.sl-model-inline {
+  font-size: 0.75rem;
+  color: var(--color-primary);
+  position: relative;
+  overflow: visible;
+}
+.sl-model-select {
+  display: none;
+}
+.sl-model-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sl-expanded {
+  display: block;
+  padding-left: 34px;
+  margin-top: 8px;
+}
+.sl-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.sl-stats strong { margin-left: 4px; }
+
+.sl-proc-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  height: 22px;
+}
+.sl-proc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+// Service row state — shared modifier applied to .sl-row (border-left),
+// .sl-icon (color), and .sl-dot (background). Five inputs collapse to two
+// visual states (running/healthy = success, anything transient = warning).
+.sl-row.is-running   { border-left-color: var(--color-success); }
+.sl-row.is-loading   { border-left-color: var(--color-warning); }
+.sl-row.is-stopping  { border-left-color: var(--color-warning); }
+.sl-row.is-starting  { border-left-color: var(--color-warning); }
+.sl-row.is-zombie    { border-left-color: var(--color-warning); }
+
+.sl-icon.is-running   { color: var(--color-success); }
+.sl-icon.is-loading   { color: var(--color-warning); }
+.sl-icon.is-stopping  { color: var(--color-warning); }
+.sl-icon.is-starting  { color: var(--color-warning); }
+.sl-icon.is-zombie    { color: var(--color-warning); }
+
+.sl-dot.is-running    { background: var(--color-success); }
+.sl-dot.is-loading    { background: var(--color-warning); }
+.sl-dot.is-stopping   { background: var(--color-warning); }
+.sl-dot.is-starting   { background: var(--color-warning); }
+.sl-dot.is-zombie     { background: var(--color-warning); }
+
+// Process line state — running vs alive (zombie companion).
+.sl-proc-dot.is-running { background: var(--color-success); }
+.sl-proc-dot.is-alive   { background: var(--color-warning); }
+.sl-proc-text.is-running { color: var(--color-success); }
+.sl-proc-text.is-alive   { color: var(--color-warning); }
+.sl-proc-indent {
+  color: var(--text-muted);
+  font-family: monospace;
+  font-size: 0.75rem;
+}
+.sl-proc-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sl-proc-pid {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.sl-loading {
+  display: block;
+  padding-left: 34px;
+  margin-top: 6px;
+}
+.sl-loading-bar {
+  width: 200px;
+  height: 3px;
+  background: var(--border-medium);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.sl-loading-fill {
+  height: 100%;
+  width: 40%;
+  background: var(--color-warning);
+  border-radius: 2px;
+  animation: sl-slide 1.5s ease-in-out infinite;
+}
+@keyframes sl-slide {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(250%); }
+  100% { transform: translateX(-100%); }
+}
+.sl-loading-text {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  display: block;
+}
+
+/* Footer: stats + button at bottom-right */
+.sl-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.sl-zombie {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 34px;
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--color-warning);
+}

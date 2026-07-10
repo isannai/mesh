@@ -1,0 +1,1414 @@
+@import 'reset';
+@import 'utilities';
+
+// Shared emblem placeholder (dynamic gradient applied inline)
+.emblem-placeholder-base {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-family: monospace;
+  letter-spacing: 1px;
+  font-size: 1.2rem;
+}
+
+.page-flex-column {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sentinel-1px {
+  height: 1px;
+}
+
+.svc-row-muted {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.canvas-empty-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.main-content-fullwidth {
+  padding: 0 48px !important;
+
+  > * {
+    width: 100%;
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-body-inner {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+
+  &.full {
+    max-width: none;
+  }
+}
+
+.main-content {
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+/* === Common page layout === */
+.page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+
+  h1 { font-size: 1.3rem; }
+}
+
+.page-filters {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+  justify-content: space-between;
+}
+
+.page-filters-left {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.page-body {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+/* === Splitter === */
+.splitter {
+  flex-shrink: 0;
+  height: 8px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--border-light);
+  border-top: 1px solid var(--border-medium);
+  border-bottom: 1px solid var(--border-medium);
+  &:hover { background: var(--bg-selected); }
+}
+.splitter-handle {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-muted);
+}
+
+.page-pagination {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+  flex-shrink: 0;
+}
+
+.top-header {
+  background: var(--bg-header);
+  color: #fff;
+  box-shadow: 0 2px 4px var(--shadow-lg);
+  z-index: 100;
+
+  .top-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .header-logo-img {
+    height: 40px;
+    object-fit: contain;
+  }
+
+  .header-title {
+    font-family: Impact, "Arial Black", "Franklin Gothic Bold", "Helvetica Neue", sans-serif;
+    font-size: 1.8rem;
+    font-weight: 900;
+    letter-spacing: 3px;
+    line-height: 1;
+    cursor: pointer;
+    color: #8b9dc3;
+  }
+
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .header-badge {
+    background: var(--color-primary);
+    color: #fff;
+    padding: 4px 14px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+}
+
+/* === Software Tabs === */
+.software-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border-medium);
+  flex-shrink: 0;
+}
+
+.software-tab {
+  padding: 8px 20px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.2s, border-color 0.2s;
+
+  &:hover { color: var(--color-primary); }
+  &.active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
+  }
+}
+
+.app-footer {
+  background: var(--bg-footer);
+  color: var(--text-muted);
+  flex-shrink: 0;
+
+  .app-footer-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 28px 24px;
+    text-align: center;
+    font-size: 0.8rem;
+  }
+
+  .footer-sep { margin: 0 8px; }
+}
+
+/* === Detail Card (shared) === */
+.detail-card {
+  margin-top: 16px;
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.detail-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-card-header);
+  border-bottom: 1px solid var(--border-light);
+  border-radius: 8px 8px 0 0;
+
+  h3 {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    margin: 0;
+  }
+}
+
+.detail-card-close {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0 4px;
+
+  &:hover { color: var(--color-danger); }
+}
+
+.detail-card-body {
+  padding: 16px;
+}
+
+.detail-card-group {
+  margin-bottom: 16px;
+
+  &:last-child { margin-bottom: 0; }
+}
+
+.detail-card-group-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.detail-card-row {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 0.88rem;
+}
+
+.detail-card-label {
+  width: 160px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.detail-card-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.detail-card-group input[type="text"],
+.detail-card-group input[type="number"],
+.detail-card-group select,
+.detail-card-group textarea {
+  padding: 6px 10px;
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: inherit;
+  &:focus { outline: none; border-color: var(--color-primary); }
+}
+
+/* Node service cards */
+/* === Toggle Switch (shared) === */
+.toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 40px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--bg-toggle-off);
+  padding: 2px;
+  cursor: pointer;
+  transition: background 0.2s;
+  position: relative;
+
+  &.on { background: rgba(63,185,80,0.4); border: 1px solid rgba(63,185,80,0.5); }
+}
+
+.toggle-knob {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  box-shadow: none;
+  .on & { background: #3fb950; }
+  transition: transform 0.2s;
+
+  .on & { transform: translateX(20px); }
+}
+
+.toggle-label {
+  position: absolute;
+  left: 60px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+
+  .on & { color: var(--color-success); }
+}
+
+.node-svc-card {
+  background: var(--bg-card-header);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  &:last-child { margin-bottom: 0; }
+}
+
+/* === Node Cards Grid === */
+.node-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.node-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--card-radius);
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  position: relative;
+  height: 164px; // fixed so emblem width and footer divider stay put (jobs row + TPM row)
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+
+  &:hover { border-color: var(--color-primary); box-shadow: 0 0 0 1px var(--color-primary-alpha); }
+  &.selected { border-color: var(--color-primary); box-shadow: 0 0 0 2px var(--color-primary-alpha); background: var(--bg-selected); }
+  &.offline { opacity: 0.6; }
+}
+
+.node-card-emblem {
+  aspect-ratio: 2 / 3;
+  flex-shrink: 0;
+  background: var(--bg-card-header);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  img { width: 100%; height: 100%; object-fit: cover; }
+  .default-icon { font-size: 2.2rem; color: var(--text-muted); }
+}
+
+.node-card-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+}
+
+.node-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+
+.node-card-id {
+  font-size: 0.82rem;
+  font-family: 'Consolas', monospace;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.node-card-auth {
+  margin-top: 2px;
+}
+
+.tpm-cert-icon, .shield-lock-icon {
+  flex-shrink: 0;
+  cursor: default;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
+}
+
+.node-card-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  justify-content: space-between;
+}
+
+.node-card-jobs-row {
+  .jobs-left {
+    flex-shrink: 0;
+  }
+  .jobs-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-left: auto;
+  }
+}
+
+.node-card-stats {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  justify-content: flex-start;
+  gap: 4px;
+  flex-wrap: wrap;
+
+  .stat-item {
+    color: var(--text-muted);
+  }
+  .stat-running {
+    color: var(--color-success, #3fb950);
+    font-weight: 600;
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+
+    &::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse-running 1.2s ease-in-out infinite;
+    }
+  }
+}
+
+@keyframes pulse-running {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.node-card-footer-spacer {
+  flex: 1;
+}
+
+.node-card-header-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Header right — reserved icon slots (shield, star) */
+.node-card-hdr-right {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.icon-slot {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  &.inactive {
+    opacity: 0.25;
+    filter: grayscale(1);
+  }
+}
+
+.fav-star-icon {
+  color: #d4a017;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+/* Label + GPU side by side */
+.node-card-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-height: 18px;
+}
+
+.node-card-gpu {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* TPM badge — sits below the metrics row. Two states:
+   - .verified: green ✓, RV challenge passed (full attestation)
+   - .pending : gray, EK cert received but challenge not yet completed
+   Borderless to match the rest of the node card's badge palette. */
+.node-card-tpm-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  border: 0;
+
+  &.verified {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+  }
+
+  &.pending {
+    background: rgba(139, 148, 158, 0.18);
+    color: var(--text-muted);
+  }
+}
+
+.node-card-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-card-services {
+  height: 44px;         // fixed so footer divider stays at consistent position
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.svc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 6px;
+  font-size: 0.78rem;
+  &:last-child { margin-bottom: 0; }
+}
+
+.svc-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 16px;
+}
+
+.svc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  &.running { background: var(--color-success); }
+  &.loading { background: var(--color-warning); }
+  &.stopped { background: var(--text-muted); }
+}
+
+/* Shared model-label-with-prefix block — used by ModelLabel
+   component across every node card surface (Trending Models /
+   my-nodes / nodes / node-detail / search). Prefix is the HF owner
+   or Civitai numeric id; "imported" placeholder gets dimmed so it
+   reads as "no real namespace".
+
+   Truncation: the long model name (e.g. Civitai's
+   "demonicSquirrelsMixV1_v15.safetensors") overflows narrow surfaces
+   like the Trending card. Use min-width:0 + overflow:hidden on the
+   flex container and ellipsis on the name segment so the prefix and
+   "/" stay visible while the tail collapses to "…". The component's
+   `title` attr surfaces the full string on hover. */
+.model-label-with-prefix {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+
+  /* model-label-link: applied when ModelLabel has an external search
+     destination (Civitai / HuggingFace). Cursor + hover underline
+     signal it's clickable; color stays inherited so the row reads
+     like body text until pointer lands. */
+  &.model-label-link {
+    cursor: pointer;
+
+    &:hover .model-name {
+      text-decoration: underline;
+    }
+  }
+
+  .model-prefix {
+    color: var(--text-secondary);
+    font-weight: 500;
+    flex-shrink: 0;
+
+    &.muted {
+      color: var(--text-muted);
+      opacity: 0.7;
+      font-weight: 400;
+    }
+  }
+  .model-prefix-sep {
+    color: var(--text-muted);
+    margin: 0 1px;
+    flex-shrink: 0;
+  }
+  .model-name {
+    /* Color inherited from the parent surface so my-nodes / nodes /
+       node-detail render the model name as plain body text, not a
+       link-blue tone. Search NodeCard wraps ModelLabel in
+       .model-label-clickable which applies its own color + hover
+       underline so the click affordance only shows where it's real. */
+    color: inherit;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+}
+
+/* Service / model line — colors mirror search/index.scss's
+   .engine-label and .model-label so my-nodes / nodes / search cards
+   render identically: orange-ish service name + primary-blue model
+   name, both at the parent's font size. */
+.svc-name {
+  flex-shrink: 0;
+  color: var(--color-warning-dark);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.svc-model-inline {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  /* Inserts the same "·" separator the search card renders, so
+     my-nodes / nodes match without touching their JSX. */
+  &::before {
+    content: "·";
+    color: var(--text-muted);
+    margin-right: 6px;
+  }
+}
+
+.svc-loading-pct {
+  color: var(--color-warning);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.svc-ctx-badge {
+  flex-shrink: 0;
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 10px;
+  border-radius: var(--badge-radius);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(88, 166, 255, 0.12);
+  color: #58a6ff;
+}
+
+.svc-more {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: right;
+  height: 16px;
+  line-height: 16px;
+}
+
+.node-card-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 48px;      // stable height covering jobs row + TPM row
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-light);
+  padding-top: 8px;
+  margin-top: auto;
+}
+
+.queue-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  &::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-primary);
+  }
+}
+
+.fav-star {
+  font-size: 1rem;
+  cursor: pointer;
+  line-height: 1;
+  margin-left: 8px;
+  &.active { color: var(--color-warning); }
+  &.inactive { color: var(--text-muted); }
+  &:hover { color: var(--color-warning); }
+}
+
+/* === Side Panel Layout === */
+.page-body-with-side {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.page-body-cards {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+.side-panel {
+  width: 380px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+.side-panel .detail-card {
+  margin-top: 0;
+}
+
+.node-svc-name {
+  font-weight: 600;
+  color: var(--color-primary);
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+.node-svc-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.node-svc-meta-item {
+  display: flex;
+  gap: 4px;
+  .meta-label { font-weight: 500; }
+  .meta-value {
+    color: var(--text-primary);
+    font-family: 'Consolas', 'Courier New', monospace;
+  }
+}
+
+/* ===== Workspace Landing Page ===== */
+.workspace-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  // intro 짤림 방지: 상단부터 자연스럽게 시작, vertical centering 제거
+  justify-content: flex-start;
+  padding: 40px 24px;
+}
+
+.workspace-hero {
+  text-align: center;
+  margin-bottom: 72px;
+  /* Without these, the hero shrinks to its text content (~500px) and
+     forces the search-wrap inside it to be narrow regardless of its own
+     max-width. align-self stretches it to the parent's width. */
+  align-self: stretch;
+  width: 100%;
+}
+
+.workspace-title {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+
+.workspace-fullname {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--color-primary);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+
+.workspace-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+/* ===== Workspace search wrap (matches home-mockup.html) =====
+   White search bar at the hero, centered, ~760px max-width. */
+.workspace-search-wrap {
+  max-width: 900px;
+  width: 100%;
+  margin: 28px auto 0;
+}
+
+.workspace-search-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  border-radius: 8px;       // less rounded than before (was 12px → felt pill-y)
+  padding: 6px;
+  box-shadow: 0 8px 32px rgba(31, 111, 235, 0.25);
+}
+
+.workspace-search-input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #24292f;
+  font-size: 17px;
+  font-weight: 500;
+  padding: 8px 16px;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  &::placeholder {
+    color: #4b545c;            // a touch darker — feels less ghosted
+    font-weight: 600;          // bolder placeholder per user feedback
+  }
+}
+
+.workspace-search-chip {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #f0f7ff;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+.workspace-search-chip-hash    { background: rgba(108, 92, 231, 0.12); color: #6c5ce7; border-color: #6c5ce7; }
+.workspace-search-chip-address { background: #f0f7ff; color: var(--color-primary); border-color: var(--color-primary); }
+.workspace-search-chip-node    { background: rgba(0, 184, 148, 0.12); color: var(--color-success); border-color: var(--color-success); }
+.workspace-search-chip-gpu,
+.workspace-search-chip-engine  { background: rgba(253, 203, 110, 0.18); color: var(--color-warning-dark); border-color: var(--color-warning); }
+
+.workspace-search-submit {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-primary);
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) { background: var(--color-primary-hover); }
+  &:disabled {
+    background: #c8d3e0;
+    color: white;
+    cursor: not-allowed;
+  }
+}
+
+.workspace-search-hint {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 10px;
+
+  strong { color: var(--text-primary); }
+}
+
+/* ===== Hero filter chips (Order / Sources / Filters) ===== */
+.workspace-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.ws-filter-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.ws-filter-group-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Chips: pre-allocate space so toggling active doesn't re-flow.
+   - font-weight stays 600 always (inactive feels boldish but doesn't shift)
+   - bg/border only change on active
+   - no checkmark prefix; active state is visible from color alone */
+.ws-filter-chip {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  padding: 5px 14px;
+  border-radius: var(--badge-radius);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover:not(:disabled) {
+    border-color: var(--color-primary);
+    color: var(--text-primary);
+  }
+}
+
+.ws-filter-chip-active {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+
+  .ws-filter-chip-mark { opacity: 1; }
+
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    color: white;
+  }
+}
+
+.ws-filter-chip-mark {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+
+.ws-filter-chip-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+
+  .ws-filter-chip-mark { visibility: hidden; }
+}
+
+/* Divider between Trending and Workspace sections */
+.workspace-divider {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border-light);
+  margin: 32px 0 0;
+}
+
+/* ===== Workspace sections (Trending Models / Workspace cards) ===== */
+.workspace-section {
+  width: 100%;
+  margin-top: 32px;
+}
+
+.workspace-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 16px;
+}
+
+.workspace-section-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.workspace-section-link {
+  color: var(--color-primary);
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+
+  &:hover { text-decoration: underline; }
+}
+
+.workspace-section-link-muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Starter Models — service-grouped sub-section. Each `.starter-group`
+   is a labeled bucket that contains a `.trending-grid` of recommended
+   cards (reusing trending-card visuals to stay consistent). The
+   service-name pill is defined locally instead of reusing
+   `.sw-service-tag` (which lives nested under `.sw-card` in
+   models/index.scss and wouldn't apply here). */
+/* Service tag pill — lifted out of `.starter-group` so it applies in
+   any context (curated card tags row, group header, future surfaces).
+   The previous rule was nested under `.starter-group`, which broke the
+   moment we removed the group wrapper to render cards in a flat grid. */
+.sw-service-tag {
+  display: inline-block;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--badge-radius);
+  background: var(--color-primary-alpha);
+  color: var(--color-primary);
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.starter-group {
+  margin-top: 18px;
+
+  &:first-child { margin-top: 0; }
+}
+.starter-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* ===== Trending Models cards (mini-card style) ===== */
+.trending-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.trending-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--card-radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--color-primary);
+    background: var(--bg-hover);
+    transform: translateY(-2px);
+  }
+
+  /* Skeleton variant — strip hover affordance so the placeholder
+     doesn't feel clickable while data is in flight. */
+  &.skeleton-card {
+    cursor: default;
+    &:hover {
+      border-color: var(--border-light);
+      background: var(--bg-card);
+      transform: none;
+    }
+  }
+}
+
+.trending-card-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0; /* allow ModelLabel / name ellipsis inside */
+
+  > .model-label-with-prefix {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Curated card title — emoji + name span. Long names (e.g. Civitai
+     versionId/file paths) overflow the narrow card width and wrap
+     onto a second line; clamp to one line and ellipsize. */
+  .trending-card-icon {
+    flex-shrink: 0;
+  }
+  .trending-card-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.trending-card-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.trending-card-count {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.trending-card-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.trending-tag {
+  background: var(--bg-input-alt);
+  border: 1px solid var(--border-light);
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 10px;
+  color: var(--color-primary);
+}
+
+/* Brand-source tag — global, reusable across catalog cards, starter
+   cards, my-nodes Components cards, etc. Pair `.brand-tag` with one
+   of the modifier classes below. Colors match each source's brand
+   identity so the same source reads identically everywhere. */
+.brand-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  border: 1px solid transparent;
+
+  &.brand-tag-huggingface {
+    background: rgba(255, 210, 30, 0.18);
+    border-color: rgba(255, 210, 30, 0.35);
+    color: #ffd21e;
+  }
+  &.brand-tag-civitai {
+    background: rgba(240, 168, 58, 0.18);
+    border-color: rgba(240, 168, 58, 0.35);
+    color: var(--color-warning-dark);
+  }
+  &.brand-tag-import {
+    background: rgba(163, 113, 247, 0.15);
+    border-color: rgba(163, 113, 247, 0.35);
+    color: #a371f7;
+  }
+}
+
+.workspace-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  max-width: 1200px;
+  width: 100%;
+}
+
+@media (max-width: 1100px) {
+  .workspace-cards { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 800px) {
+  .workspace-cards { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .workspace-cards { grid-template-columns: 1fr; }
+}
+
+.workspace-card {
+  aspect-ratio: 4 / 3;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--card-radius);
+  padding: 20px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+  position: relative;
+  overflow: hidden;
+
+  &:hover {
+    border-color: var(--card-accent, var(--color-primary));
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    transform: translateY(-2px);
+  }
+}
+
+.wc-icon {
+  color: var(--card-accent, var(--color-primary));
+  display: flex;
+  align-items: center;
+}
+
+.wc-body { flex: 1; }
+
+.wc-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.wc-desc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-bottom: 10px;
+}
+
+.wc-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.wc-stat-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  &.online { background: var(--color-success); }
+}
+
+.wc-stat-sep {
+  width: 1px;
+  height: 10px;
+  background: var(--border-default);
+  margin: 0 4px;
+}
+
+.wc-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.wc-sub-tag {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-primary-alpha);
+  color: var(--text-secondary);
+}
+
+.wc-arrow {
+  position: absolute;
+  top: 24px;
+  right: 20px;
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  transition: color 0.15s, transform 0.15s;
+}
+
+.workspace-card:hover .wc-arrow {
+  color: var(--card-accent, var(--color-primary));
+  transform: translateX(4px);
+}
+
+.copy-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: color 0.15s, border-color 0.15s;
+
+  &:hover {
+    color: var(--text-primary);
+    border-color: var(--text-primary);
+  }
+
+  &.copied {
+    color: var(--color-success, #22c55e);
+    border-color: var(--color-success, #22c55e);
+  }
+}

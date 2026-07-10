@@ -33,3 +33,7 @@ go.work.sum
 
 # Build output (mesh app zips)
 build/*/out-mesh/
+
+# Web (control SPA)
+web/control/node_modules/
+web/control/build/

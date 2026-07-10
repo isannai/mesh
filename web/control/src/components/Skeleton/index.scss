@@ -1,0 +1,43 @@
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base, rgba(255,255,255,0.06)) 25%,
+    var(--skeleton-shine, rgba(255,255,255,0.12)) 50%,
+    var(--skeleton-base, rgba(255,255,255,0.06)) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+  min-height: 14px;
+
+  &--line {
+    height: 14px;
+    border-radius: 3px;
+    margin-bottom: 4px;
+  }
+
+  &--circle {
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  &--block {
+    border-radius: 6px;
+  }
+}
+
+:root {
+  --skeleton-base: rgba(0,0,0,0.06);
+  --skeleton-shine: rgba(0,0,0,0.12);
+}
+
+[data-theme="dark"] {
+  --skeleton-base: rgba(255,255,255,0.06);
+  --skeleton-shine: rgba(255,255,255,0.12);
+}

@@ -1,0 +1,9 @@
+.confirm-dialog {
+  background: var(--bg-card); border-radius: 8px; padding: 24px;
+  width: 400px; text-align: center;
+  box-shadow: 0 4px 20px var(--shadow-md);
+  color: var(--text-primary);
+
+  p { margin-bottom: 20px; font-size: 1rem; }
+  .confirm-actions { display: flex; gap: 8px; justify-content: center; }
+}

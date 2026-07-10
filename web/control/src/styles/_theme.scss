@@ -1,0 +1,108 @@
+:root {
+  // Single source of truth for pill / chip / badge radii. Every small
+  // status pill (GPU chip, ctx-size badge, filter chip, source label,
+  // count badge, match-reason, status-tag …) reads this so they stay
+  // visually identical across every page. Don't hardcode pill radii
+  // anywhere — pull from --badge-radius / --pill-radius instead.
+  --badge-radius: 6px;     // small pills / labels (matches StatusTag's "idle")
+  --pill-radius:  6px;     // alias for filter chips / button-style pills
+  --input-radius: 8px;     // text inputs, selects, dropdowns, textareas — keep all form controls visually consistent. Override per-component sparingly (and only via this var).
+  --card-radius:  10px;    // larger surfaces (result-card, sw-card, node-card, trending-card, workspace-card). Single source of truth so every card looks identical when active / hovered / selected.
+
+  --bg-body: #f5f6fa;
+  --bg-card: #fff;
+  --bg-card-header: #f8f9fa;
+  --bg-header: #0a0a1a;
+  --bg-sidebar: #34495e;
+  --bg-sidebar-hover: #4a6274;
+  --bg-footer: #2d3436;
+  --bg-input: #fff;
+  --bg-input-alt: #f8f9fa;
+  --bg-disabled: #f5f6fa;
+  --bg-hover: #f8f9fa;
+  --bg-selected: #dfe6e9;
+  --bg-modal-overlay: rgba(0,0,0,0.4);
+  --bg-toggle-off: #dfe6e9;
+
+  --text-primary: #2d3436;
+  --text-secondary: #636e72;
+  --text-muted: #b2bec3;
+  --text-on-dark: #dfe6e9;
+  --text-sidebar: #b2bec3;
+
+  --border-light: #eee;
+  --border-default: #ddd;
+  --border-medium: #dfe6e9;
+  --border-input: #d0d0d0;
+  --border-dropdown: #e0e0e0;
+
+  --color-primary: #0984e3;
+  --color-primary-hover: #0770c2;
+  --color-primary-bg: #f0f7ff;
+  --color-primary-bg-hover: #e3effd;
+  --color-primary-alpha: rgba(9, 132, 227, 0.1);
+  --color-primary-alpha-light: rgba(9, 132, 227, 0.08);
+
+  --color-danger: #d63031;
+  --color-danger-dark: #b71c1c;
+  --color-danger-bg: #ffeaea;
+  --color-success: #00b894;
+  --color-success-dark: #00a381;
+  --color-warning: #fdcb6e;
+  --color-warning-dark: #f9b32f;
+  --color-purple: #6c5ce7;
+  --color-purple-dark: #5a4bd1;
+
+  --shadow-sm: rgba(0,0,0,0.08);
+  --shadow-md: rgba(0,0,0,0.15);
+  --shadow-lg: rgba(0,0,0,0.2);
+}
+
+[data-theme="dark"] {
+  --bg-body: #0c0e1a;
+  --bg-card: #141728;
+  --bg-card-header: #111425;
+  --bg-header: #080a14;
+  --bg-sidebar: #0a0c18;
+  --bg-sidebar-hover: #1c2040;
+  --bg-footer: #080a14;
+  --bg-input: #0e1020;
+  --bg-input-alt: #111425;
+  --bg-disabled: #0e1020;
+  --bg-hover: #1a1e35;
+  --bg-selected: #222850;
+  --bg-modal-overlay: rgba(0,0,0,0.7);
+  --bg-toggle-off: #2a2e45;
+
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #586880;
+  --text-on-dark: #a0b0c8;
+  --text-sidebar: #6878a0;
+
+  --border-light: #1e2240;
+  --border-default: #222845;
+  --border-medium: #252a48;
+  --border-input: #2a3050;
+  --border-dropdown: #252a48;
+
+  --color-primary: #6c8cef;
+  --color-primary-hover: #5a7de8;
+  --color-primary-bg: #1a2048;
+  --color-primary-bg-hover: #202858;
+  --color-primary-alpha: rgba(108, 140, 239, 0.18);
+  --color-primary-alpha-light: rgba(108, 140, 239, 0.08);
+  --color-danger: #f06060;
+  --color-danger-dark: #e04848;
+  --color-danger-bg: #301818;
+  --color-success: #50d8a0;
+  --color-success-dark: #40c890;
+  --color-warning: #f0c860;
+  --color-warning-dark: #e0b848;
+  --color-purple: #a78bfa;
+  --color-purple-dark: #8b6ff0;
+
+  --shadow-sm: rgba(0,0,0,0.5);
+  --shadow-md: rgba(0,0,0,0.6);
+  --shadow-lg: rgba(0,0,0,0.7);
+}

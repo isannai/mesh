@@ -1,0 +1,13 @@
+{
+  "listen_addr": ":8080",
+  "outbound_gateway": {
+    "node_bridge_addr": "http://127.0.0.1:8443",
+    "rv_control_addr":  "127.0.0.1:19100"
+  },
+  "web_dir": "web/control/build",
+  "timeout": {
+    "provider": 180,
+    "connect": 20,
+    "stale_detect": 5
+  }
+}

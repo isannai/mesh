@@ -1,0 +1,14 @@
+{
+  "spec_version": "1",
+  "name": "control",
+  "version": "0.1.0",
+  "author": "isann",
+  "description": "control center",
+  "bin": "bin/control",
+  "args": ["-config", "conf/control.json"],
+  "isannd": {
+    "servers": {
+      "6443": { "listen": ["https", "http3"], "bind": "0.0.0.0", "role": "control", "proxy_pass": "http://127.0.0.1:8080" }
+    }
+  }
+}

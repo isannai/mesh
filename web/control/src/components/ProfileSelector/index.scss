@@ -1,0 +1,203 @@
+.profile-selector {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+// trigger / + 버튼 모두 24px 높이로 통일 (sl-dep label 의 0.75rem 텍스트와 시각적 균형).
+.profile-selector-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+%profile-btn-shared {
+  height: 24px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0 10px;
+  transition: background 0.12s, border-color 0.12s, transform 0.1s;
+}
+
+.profile-selector-btn {
+  @extend %profile-btn-shared;
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  color: var(--color-primary);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &.empty { color: var(--color-danger); }
+  &:disabled { opacity: 0.6; cursor: wait; }
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--color-primary);
+  }
+  &:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+}
+
+.profile-selector-readonly {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background: rgba(139, 148, 158, 0.12);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* needs-review banner inside the trigger button — surfaces the lock
+   state on the active profile. Operator clicks the dropdown, picks
+   the entry, lands in the editor, and Save clears the flag. */
+.profile-selector-trigger-warn {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(231, 169, 49, 0.18);
+  border: 1px solid rgba(231, 169, 49, 0.4);
+  color: var(--color-warning);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.profile-selector-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  margin-top: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-dropdown);
+  border-radius: var(--input-radius);
+  box-shadow: 0 4px 12px var(--shadow-lg);
+  width: 360px;
+  max-height: 280px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-selector-search {
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.profile-selector-list {
+  overflow-y: auto;
+  max-height: 240px;
+}
+
+.profile-selector-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.profile-selector-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light);
+
+  &:last-child { border-bottom: none; }
+  &:hover { background: var(--bg-hover); }
+  &.active {
+    background: var(--color-primary-bg);
+  }
+  /* Locked entry — auto-seeded by `isann install -model`, awaiting
+     operator review. Click sends them to the editor instead of
+     activating the profile. */
+  &.needs-review {
+    background: rgba(231, 169, 49, 0.06);
+
+    &:hover { background: rgba(231, 169, 49, 0.12); }
+
+    .profile-selector-item-main {
+      cursor: help;
+    }
+  }
+}
+
+.profile-selector-item-warn {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(231, 169, 49, 0.18);
+  border: 1px solid rgba(231, 169, 49, 0.4);
+  color: var(--color-warning);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+/* Architecture badge — short identifier (SD 1.5 / SDXL / Qwen2 / …)
+   shown next to the profile label. Operator can scan compatibility
+   without opening the editor. Style matches the existing pill family. */
+.profile-selector-item-arch {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(210, 168, 255, 0.14);
+  border: 1px solid rgba(210, 168, 255, 0.3);
+  color: var(--color-purple, #d2a8ff);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  vertical-align: middle;
+}
+
+.profile-selector-item-main {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.profile-selector-item-label {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.profile-selector-item-preview {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}
+
+/* Footer hint — points operators at the Profiles tab for CRUD. The
+   selector itself only swaps the active profile now (quick-swap surface). */
+.profile-selector-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-light);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+
+  b { color: var(--color-primary); font-weight: 600; }
+}

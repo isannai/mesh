@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MyNode Card Mockup</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card-header: #1f2428;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #c9d1d9;
+    --text-muted: #8b949e;
+    --color-success: #3fb950;
+    --color-warning: #d29922;
+    --color-primary: #4a9eff;
+  }
+  body { background: var(--bg); color: var(--text-primary); font-family: -apple-system,BlinkMacSystemFont,sans-serif; padding: 24px; }
+  h2 { color: var(--text-muted); font-size: 14px; font-weight: 500; margin: 32px 0 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 1600px; }
+
+  /* === Shared === */
+  .node-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    min-height: 140px;
+    display: flex;
+    overflow: hidden;
+  }
+  .emblem {
+    aspect-ratio: 2/3;
+    background: linear-gradient(135deg, #4d3fe4, #3d2bb5);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 1.3rem;
+    flex-shrink: 0;
+  }
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 10px 14px; gap: 4px; }
+  .id { font-size: 0.82rem; font-family: 'Consolas', monospace; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .label { font-size: 0.88rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .svc-row-head { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--color-success); }
+  .svc-name { color: var(--text-secondary); font-weight: 500; flex-shrink: 0; }
+  .svc-model { flex: 1; min-width: 0; color: var(--text-muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 6px;
+    font-size: 0.68rem; font-weight: 600; line-height: 1.3;
+    background: rgba(74,158,255,0.15); color: #4a9eff;
+  }
+  .tag.offline { background: rgba(139,148,158,0.2); color: #8b949e; }
+  .footer { font-size: 0.72rem; color: var(--text-muted); display: flex; justify-content: space-between; margin-top: auto; }
+  .stats { font-size: 0.7rem; color: var(--text-muted); display: flex; gap: 6px; align-items: center; }
+  /* fixed 24x24 slots — never shift when optional icons absent */
+  .icon-slot {
+    width: 24px; height: 24px; display: inline-flex;
+    align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  /* when feature is absent — ghost the icon so the slot is visible */
+  .icon-slot.inactive { opacity: 0.25; filter: grayscale(1); }
+  .icon-slot.inactive .star { color: var(--text-muted); }
+  .star {
+    font-size: 1.3rem; color: #d4a017;
+    line-height: 1;
+  }
+  .tpm-icon {
+    width: 20px; height: 20px; display: block;
+    background: radial-gradient(circle, #d4a017 0%, #b8860b 70%);
+    border-radius: 50%;
+    position: relative;
+  }
+  .tpm-icon::after {
+    content: "✓"; color: #fff; font-size: 12px; font-weight: 700;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  }
+  .shield-icon {
+    width: 18px; height: 18px; display: block;
+    background: #4a9eff;
+    border-radius: 3px 3px 2px 2px;
+    position: relative;
+  }
+  .shield-icon::before {
+    content: ""; width: 9px; height: 5px; border: 1.8px solid #4a9eff;
+    border-bottom: none; border-radius: 4px 4px 0 0;
+    position: absolute; top: -5px; left: 50%; transform: translateX(-50%);
+    background: transparent;
+  }
+  .shield-icon::after {
+    content: "●"; color: #fff; font-size: 9px;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  }
+  /* Trust: scalloped verified badge (Twitter-like) */
+  .trust-icon {
+    width: 22px; height: 22px; display: block;
+    color: #1d9bf0;
+    position: relative;
+  }
+  .trust-icon svg { display: block; width: 100%; height: 100%; }
+  .tpm-issuer { font-size: 0.64rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; display: inline-flex; align-items: center; gap: 4px; }
+  .tpm-inline-check {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #d4a017; color: #fff; font-size: 9px; font-weight: 700; flex-shrink: 0;
+  }
+
+  /* === Option A: ID + [tag] inline, icons in fixed 24x24 slots === */
+  .A .hdr { display: flex; align-items: center; gap: 6px; }
+  .A .hdr .id { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .A .hdr-right { margin-left: auto; display: inline-flex; gap: 2px; align-items: center; flex-shrink: 0; }
+
+  /* === Option B: tag as separate row above label === */
+  .B .tag-row { margin: 2px 0; }
+
+  /* === Option C: tag next to label === */
+  .C .label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .C .label-row .label { flex: 1; }
+
+  /* === Option D: tag in emblem overlay === */
+  .D .emblem { position: relative; }
+  .D .emblem .tag { position: absolute; top: 6px; right: 6px; }
+</style>
+</head>
+<body>
+
+<h2>비교 — GPU 현위치 (footer 오른쪽) vs 별 아래</h2>
+<p style="color:var(--text-muted);font-size:0.8rem;">왼쪽: 현재 / 오른쪽: GPU 를 별 아래로</p>
+<div class="grid">
+  <!-- 현재: GPU 가 footer 오른쪽 -->
+  <div class="node-card A">
+    <div class="emblem">BA</div>
+    <div class="content">
+      <div class="hdr">
+        <span class="id">P:0xBADa8b...7CEe</span>
+        <span class="tag">idle</span>
+        <span class="hdr-right">
+          <span class="icon-slot" title="Protected"><span class="shield-icon"></span></span>
+          <span class="icon-slot"><span class="star">⭐</span></span>
+        </span>
+      </div>
+      <div class="label">my-gpu-01</div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">llm-api</span><span class="svc-model">Qwen2.5-148-Instruct-Q4_K_M</span></div>
+      <div class="footer"><span>0 jobs</span><span>RTX 3060</span></div>
+      <div class="stats"><span>1 done · avg 642ms</span></div>
+      <div class="tpm-issuer"><span class="tpm-inline-check">✓</span>TPM: CSME ADL PTT 01SVN</div>
+    </div>
+  </div>
+
+  <!-- 비교: GPU 를 별 아래 -->
+  <div class="node-card A">
+    <div class="emblem">BA</div>
+    <div class="content">
+      <div class="hdr">
+        <span class="id">P:0xBADa8b...7CEe</span>
+        <span class="tag">idle</span>
+        <span class="hdr-right">
+          <span class="icon-slot" title="Protected"><span class="shield-icon"></span></span>
+          <span class="icon-slot"><span class="star">⭐</span></span>
+        </span>
+      </div>
+      <div class="label">my-gpu-01</div>
+      <div style="font-size:0.7rem;color:var(--text-muted);text-align:right;margin-top:-14px;margin-bottom:4px">RTX 3060</div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">llm-api</span><span class="svc-model">Qwen2.5-148-Instruct-Q4_K_M</span></div>
+      <div class="footer"><span>0 jobs</span></div>
+      <div class="stats"><span>1 done · avg 642ms</span></div>
+      <div class="tpm-issuer"><span class="tpm-inline-check">✓</span>TPM: CSME ADL PTT 01SVN</div>
+    </div>
+  </div>
+</div>
+
+<h2>Final — ID + [tag] 한 줄 / ⭐ 우측 (기존)</h2>
+<p style="color:var(--text-muted);font-size:0.8rem;">My Nodes: Label, Nodes: Owner Address</p>
+<div class="grid">
+  <!-- My Nodes 버전 (Label) — Protected + Trust + Fav (TPM 은 하단 issuer 옆) -->
+  <div class="node-card A">
+    <div class="emblem">BA</div>
+    <div class="content">
+      <div class="hdr">
+        <span class="id">P:0xBADa8b...7CEe</span>
+        <span class="tag">idle</span>
+        <span class="hdr-right">
+          <span class="icon-slot" title="Protected"><span class="shield-icon"></span></span>
+          <span class="icon-slot"><span class="star">⭐</span></span>
+        </span>
+      </div>
+      <div class="label">my-gpu-01</div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">llm-api</span><span class="svc-model">Qwen2.5-148-Instruct-Q4_K_M</span></div>
+      <div class="footer"><span>0 jobs</span><span>RTX 3060</span></div>
+      <div class="stats"><span>1 done · avg 642ms</span></div>
+      <div class="tpm-issuer"><span class="tpm-inline-check">✓</span>TPM: CSME ADL PTT 01SVN</div>
+    </div>
+  </div>
+
+  <!-- Nodes 버전 (Owner Address, 별 슬롯 빈칸으로 예약) -->
+  <div class="node-card A">
+    <div class="emblem" style="background:linear-gradient(135deg,#2d7a3a,#1e5a2a)">SV</div>
+    <div class="content">
+      <div class="hdr">
+        <span class="id">P:0x1234abcd...ef99</span>
+        <span class="tag" style="background:rgba(240,136,62,0.15);color:#f0883e">busy</span>
+        <span class="hdr-right">
+          <span class="icon-slot inactive" title="Not protected"><span class="shield-icon"></span></span>
+          <span class="icon-slot inactive" title="Not in My Nodes"><span class="star">⭐</span></span>
+        </span>
+      </div>
+      <div class="label" style="font-family:'Consolas',monospace;font-size:0.78rem;color:var(--text-muted);font-weight:400">0xaEd453E8...4D4c</div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">sd-api</span><span class="svc-model">stable-diffusion-v1.5</span></div>
+      <div class="footer"><span>3 jobs</span><span>RTX 4090</span></div>
+      <div class="stats"><span>2.1k done · avg 4.2s</span></div>
+      <div class="tpm-issuer"><span class="tpm-inline-check">✓</span>TPM: INTL CSE PTT</div>
+    </div>
+  </div>
+
+  <!-- Offline 버전 -->
+  <div class="node-card A" style="opacity:0.6">
+    <div class="emblem" style="background:linear-gradient(135deg,#6a3fd4,#4a2bb5)">HX</div>
+    <div class="content">
+      <div class="hdr">
+        <span class="id">P:0xHhHhHhHh...aAaA</span>
+        <span class="tag offline">offline</span>
+        <span class="hdr-right">
+          <span class="icon-slot inactive" title="Not protected"><span class="shield-icon"></span></span>
+          <span class="icon-slot" title="Favorited"><span class="star">⭐</span></span>
+        </span>
+      </div>
+      <div class="label">backup-node</div>
+      <div class="svc-row-head"><span class="dot" style="background:var(--text-muted)"></span><span class="svc-name">llm-api</span><span class="svc-model">—</span></div>
+      <div class="footer"><span></span><span>RTX 3090</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>Option B — Tag 별도 행 (ID 아래)</h2>
+<div class="grid">
+  <div class="node-card B">
+    <div class="emblem">BA</div>
+    <div class="content">
+      <div class="id">P:0xBADa8b...7CEe</div>
+      <div class="tag-row"><span class="tag">idle</span></div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">llm-api</span><span class="svc-model">Qwen2.5-148-Instruct-Q4_K_M</span></div>
+      <div class="footer"><span>0 jobs</span><span>RTX 3060</span></div>
+      <div class="stats"><span>1 done · avg 642ms</span><span class="tpm-icons"><span class="tpm-icon" title="TPM Verified"></span><span class="star">⭐</span></span></div>
+      <div class="tpm-issuer">TPM: CSME ADL PTT 01SVN</div>
+    </div>
+  </div>
+</div>
+
+<h2>Option C — Tag 라벨 옆</h2>
+<div class="grid">
+  <div class="node-card C">
+    <div class="emblem">BA</div>
+    <div class="content">
+      <div class="id">P:0xBADa8b...7CEe</div>
+      <div class="label-row">
+        <span class="label">&nbsp;</span>
+        <span class="tag">idle</span>
+      </div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">llm-api</span><span class="svc-model">Qwen2.5-148-Instruct-Q4_K_M</span></div>
+      <div class="footer"><span>0 jobs</span><span>RTX 3060</span></div>
+      <div class="stats"><span>1 done · avg 642ms</span><span class="tpm-icons"><span class="tpm-icon" title="TPM Verified"></span><span class="star">⭐</span></span></div>
+      <div class="tpm-issuer">TPM: CSME ADL PTT 01SVN</div>
+    </div>
+  </div>
+</div>
+
+<h2>Option D — Tag 엠블럼 오버레이</h2>
+<div class="grid">
+  <div class="node-card D">
+    <div class="emblem">BA<span class="tag">idle</span></div>
+    <div class="content">
+      <div class="id">P:0xBADa8b...7CEe</div>
+      <div class="label">&nbsp;</div>
+      <div class="svc-row-head"><span class="dot"></span><span class="svc-name">llm-api</span><span class="svc-model">Qwen2.5-148-Instruct-Q4_K_M</span></div>
+      <div class="footer"><span>0 jobs</span><span>RTX 3060</span></div>
+      <div class="stats"><span>1 done · avg 642ms</span><span class="tpm-icons"><span class="tpm-icon" title="TPM Verified"></span><span class="star">⭐</span></span></div>
+      <div class="tpm-issuer">TPM: CSME ADL PTT 01SVN</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

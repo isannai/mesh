@@ -1,0 +1,118 @@
+.address-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.address-table {
+  width: 100%;
+  border-collapse: collapse;
+
+  tr.row-divider {
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  td {
+    padding: 6px 8px;
+    font-size: 12px;
+
+    &.col-address {
+      font-family: monospace;
+    }
+
+    &.col-action {
+      width: 40px;
+      text-align: right;
+    }
+
+    &.cell-input {
+      padding: 4px 8px;
+    }
+
+    &.cell-input-action {
+      padding: 4px 8px;
+      width: 40px;
+      text-align: right;
+    }
+  }
+
+  .btn-remove-addr,
+  .btn-add-addr {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .btn-remove-addr {
+    color: var(--color-danger);
+  }
+
+  .btn-add-addr {
+    color: var(--color-success);
+  }
+
+  .addr-input {
+    font-family: monospace;
+    width: 100%;
+  }
+}
+
+.invalid-address-msg {
+  color: var(--color-danger);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.auth-loading {
+  color: var(--text-muted);
+}
+
+.auth-error-inline {
+  color: var(--color-danger);
+}
+
+.auth-warning-banner {
+  background: var(--color-warning);
+  color: #000;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.auth-error-banner {
+  background: var(--color-danger);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.auth-mode-value {
+  min-width: 200px;
+}
+
+.auth-owner-display {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.auth-issuer-input {
+  font-family: monospace;
+  width: 100%;
+}
+
+.auth-save-bar {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+
+  .saved-tick {
+    color: var(--color-success);
+    font-size: 12px;
+  }
+}

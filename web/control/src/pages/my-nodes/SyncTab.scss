@@ -1,0 +1,233 @@
+@keyframes sync-pulse {
+  0%, 100% { width: 30%; }
+  50% { width: 80%; }
+}
+
+.sync-tab {
+  padding: 0 4px;
+
+  .sync-title {
+    font-size: 0.95rem;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+  }
+
+  .sync-desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.5;
+  }
+
+  .sync-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .btn-create-snapshot {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: 1px solid rgba(74,158,255,0.3);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(74,158,255,0.15);
+    color: #4a9eff;
+    &:hover { background: rgba(74,158,255,0.25); }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+  }
+
+  .ttl-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 140px;
+
+    .ttl-label {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+    }
+  }
+
+  .progress-wrap {
+    margin-bottom: 16px;
+  }
+
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+
+    .progress-label {
+      font-size: 0.82rem;
+      color: var(--color-warning);
+    }
+
+    .progress-pct {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+  }
+
+  .progress-track {
+    height: 4px;
+    background: var(--border-default);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 4px;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--color-warning);
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+
+  .progress-fill-pulse {
+    animation: sync-pulse 1.5s ease-in-out infinite;
+  }
+
+  .progress-current-file {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .error-box {
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    font-size: 0.82rem;
+    color: var(--color-danger);
+    white-space: pre-wrap;
+  }
+
+  .token-box {
+    padding: 14px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--color-success);
+
+    .token-label {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .token-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .token-code {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 4px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-input);
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      word-break: break-all;
+      font-family: monospace;
+    }
+
+    .btn-copy {
+      padding: 6px 14px;
+      border-radius: 4px;
+      border: 1px solid var(--border-default);
+      background: var(--bg-card);
+      color: var(--text-primary);
+      font-size: 0.8rem;
+      cursor: pointer;
+      flex-shrink: 0;
+
+      &.copied {
+        background: var(--color-success);
+        color: #fff;
+      }
+    }
+
+    .snapshot-meta {
+      display: flex;
+      gap: 20px;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      flex-wrap: wrap;
+
+      strong {
+        color: var(--text-primary);
+      }
+    }
+  }
+
+  .cli-box {
+    padding: 12px 14px;
+    border-radius: 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-light);
+
+    .cli-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .btn-copy {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 4px;
+      border: 1px solid rgba(74,158,255,0.3);
+      background: rgba(74,158,255,0.12);
+      color: #4a9eff;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s, border-color 0.15s;
+
+      &:hover {
+        background: rgba(74,158,255,0.2);
+      }
+
+      &.copied {
+        background: rgba(63,185,80,0.15);
+        border-color: rgba(63,185,80,0.4);
+        color: var(--color-success);
+      }
+    }
+
+    .cli-code {
+      display: block;
+      padding: 10px 12px;
+      border-radius: 4px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      font-size: 0.78rem;
+      color: var(--color-primary);
+      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+  }
+}

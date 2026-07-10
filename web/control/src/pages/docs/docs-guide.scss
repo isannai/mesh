@@ -1,0 +1,983 @@
+// Docs — index cards + guide article styling.
+// Intentionally close to the broker system tokens (--bg-card, --color-primary)
+// to stay consistent with the rest of the app.
+
+// Marketing palette — used only by the docs hero / featured / about / roadmap
+// surfaces. Kept inside this file (vs the global theme) because these accent
+// gradients are landing-page specific and shouldn't bleed into operational UI.
+$mk-cy1: #58a6ff;
+$mk-cy2: #a371f7;
+$mk-cy3: #ec4899;
+$mk-cy4: #f59e0b;
+$mk-cy5: #3fb950;
+
+// Marketing backdrop — viewport-wide fixed layer rendered by AppLayout
+// when the user is on a marketing docs page. Carries the orbs + grid so
+// the "feel" extends from edge to edge regardless of where the 1200px
+// content cage sits.
+.docs-marketing-bg {
+  position: fixed; inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+
+  // Three drifting orbs — blue, violet, pink. Different sizes / delays
+  // so they don't move in lockstep. Sit at viewport scale so reading
+  // them feels like a real backdrop, not a card decoration.
+  &::before, &::after {
+    content: ""; position: absolute;
+    border-radius: 50%; filter: blur(140px);
+    animation: docs-bg-float 22s ease-in-out infinite;
+  }
+  &::before {
+    width: 640px; height: 640px;
+    background: $mk-cy1; opacity: 0.16;
+    top: -160px; left: -120px;
+  }
+  &::after {
+    width: 580px; height: 580px;
+    background: $mk-cy2; opacity: 0.14;
+    top: 28%; right: -140px;
+    animation-delay: -10s;
+  }
+
+  // Third orb via a child-of-pseudo trick — added on the parent for the
+  // pink accent at the bottom-left.
+  background:
+    radial-gradient(circle at 30% 110%, rgba(236,72,153,0.18), transparent 50%),
+    /* faint grid pattern — same vibe as the mockup's overlay */
+    linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px) 0 0 / 42px 42px,
+    linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px) 0 0 / 42px 42px,
+    var(--bg-page, #07080d);
+
+  // Soft radial mask on the grid so it fades out near the edges (mockup
+  // had the same vignette feel — keeps the grid from being too rigid).
+  mask-image: radial-gradient(ellipse at 50% 30%, #000 35%, transparent 90%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 30%, #000 35%, transparent 90%);
+}
+@keyframes docs-bg-float {
+  0%, 100% { transform: translate(0,0) scale(1); }
+  33%      { transform: translate(40px,-30px) scale(1.08); }
+  66%      { transform: translate(-30px,40px) scale(0.95); }
+}
+
+.docs-index {
+  // Defensive guard — the backdrop is on AppLayout but if the user lands
+  // here in isolation (storybook etc.) we still want orphan widgets like
+  // the featured cards to not push a horizontal scrollbar.
+  position: relative;
+  overflow-x: hidden;
+  isolation: isolate;
+
+  // Hero block on the docs landing — gradient title with eyebrow line.
+  // Visually distinct from the rest of the broker UI on purpose: this is
+  // the "story" entry point before the technical guides.
+  .docs-hero {
+    padding: 24px 0 20px;
+    margin-bottom: 28px;
+
+    .docs-hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 11px; font-weight: 700; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--text-muted);
+      margin-bottom: 14px;
+      &::before {
+        content: ""; display: inline-block;
+        width: 18px; height: 1px; background: var(--text-muted);
+      }
+    }
+    h1 {
+      font-size: 40px; font-weight: 800; line-height: 1.05;
+      letter-spacing: -1.1px; margin: 0 0 12px;
+      background: linear-gradient(120deg, #ffffff, #aab4c8 70%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
+    p {
+      font-size: 14.5px; color: var(--text-secondary);
+      max-width: 620px; line-height: 1.65; margin: 0;
+    }
+  }
+
+  // Featured grid — two large cards (About + Roadmap) with the conic-ring
+  // hover treatment. The ::before pseudo carries the rotating gradient and
+  // the ::after layers the card background on top so only the rim shows.
+  .docs-featured-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-bottom: 40px;
+  }
+  .docs-featured-card {
+    position: relative;
+    padding: 28px 26px;
+    border-radius: 16px;
+    background: linear-gradient(160deg, rgba(255,255,255,0.04), rgba(255,255,255,0.005) 70%);
+    border: 1px solid var(--border-default);
+    overflow: hidden;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+    transition: transform .35s cubic-bezier(.2,.7,.2,1), box-shadow .35s ease, border-color .35s ease;
+    isolation: isolate;
+    min-height: 200px;
+    display: flex; flex-direction: column; justify-content: space-between;
+
+    &::before {
+      content: ""; position: absolute; inset: -2px; border-radius: inherit;
+      background: conic-gradient(from 0deg, $mk-cy1, $mk-cy2, $mk-cy3, $mk-cy4, $mk-cy5, $mk-cy1);
+      opacity: 0; transition: opacity .45s ease;
+      z-index: -1; filter: blur(8px);
+      animation: docs-spin 6s linear infinite;
+    }
+    &::after {
+      content: ""; position: absolute; inset: 1px; border-radius: 15px;
+      background: linear-gradient(160deg, #0f141d, #0a0d14);
+      z-index: -1;
+    }
+    &:hover {
+      transform: translateY(-4px);
+      border-color: transparent;
+    }
+    &:hover::before { opacity: 0.9; }
+  }
+  @keyframes docs-spin { to { transform: rotate(360deg); } }
+  .docs-featured-card-about {
+    box-shadow: 0 22px 60px -28px $mk-cy1;
+    &:hover {
+      box-shadow: 0 28px 80px -22px $mk-cy1, 0 0 0 1px rgba(88,166,255,0.4);
+    }
+    .docs-featured-eyebrow { color: $mk-cy1; border-color: rgba(88,166,255,0.3); }
+    .docs-featured-cta-arrow { color: $mk-cy1; }
+  }
+  .docs-featured-card-roadmap {
+    box-shadow: 0 22px 60px -28px $mk-cy2;
+    &:hover {
+      box-shadow: 0 28px 80px -22px $mk-cy2, 0 0 0 1px rgba(163,113,247,0.4);
+    }
+    .docs-featured-eyebrow { color: $mk-cy2; border-color: rgba(163,113,247,0.3); }
+    .docs-featured-cta-arrow { color: $mk-cy2; }
+  }
+  .docs-featured-bgico {
+    position: absolute;
+    right: -10px; bottom: -24px;
+    font-size: 160px; line-height: 1;
+    opacity: 0.05;
+    pointer-events: none;
+    transition: opacity .35s ease, transform .35s ease;
+  }
+  .docs-featured-card:hover .docs-featured-bgico {
+    opacity: 0.14;
+    transform: rotate(-8deg) scale(1.05);
+  }
+  .docs-featured-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-default);
+    width: fit-content;
+  }
+  .docs-featured-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+    animation: docs-pulse 2s ease-in-out infinite;
+  }
+  @keyframes docs-pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+  }
+  .docs-featured-card h2 {
+    margin: 16px 0 8px;
+    font-size: 28px; line-height: 1.05;
+    font-weight: 800; letter-spacing: -0.4px;
+    background: linear-gradient(120deg, #ffffff, #c8d3e7 60%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  .docs-featured-desc {
+    color: var(--text-secondary);
+    font-size: 13px; line-height: 1.6;
+    max-width: 36ch;
+    margin-bottom: 20px;
+  }
+  .docs-featured-cta {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 600;
+    color: var(--text-primary);
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-default);
+    width: fit-content;
+    transition: gap .25s ease, background .25s ease;
+  }
+  .docs-featured-card:hover .docs-featured-cta {
+    gap: 12px;
+    background: rgba(255,255,255,0.07);
+  }
+
+  // Guides section — also marketing-tier styling so the whole docs page
+  // reads as one continuous landing surface, not "marketing on top +
+  // admin list below". Gradient heading, bigger cards, accent glow on
+  // hover.
+  .docs-guides-section {
+    margin-top: 8px;
+    padding-top: 32px;
+    position: relative;
+
+    // Soft divider line above the section — gradient fade instead of a
+    // hard border for a more polished transition.
+    &::before {
+      content: ""; position: absolute;
+      left: 0; right: 0; top: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-default) 20%, var(--border-default) 80%, transparent);
+    }
+  }
+  .docs-guides-head {
+    display: flex; align-items: baseline; gap: 14px;
+    margin-bottom: 20px;
+
+    h3 {
+      margin: 0;
+      font-size: 22px; font-weight: 800; letter-spacing: -0.4px;
+      background: linear-gradient(120deg, #ffffff, #c8d3e7 70%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
+    .docs-guides-hint {
+      font-size: 12.5px; color: var(--text-muted);
+      letter-spacing: 0.3px;
+    }
+  }
+
+  .docs-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+  }
+
+  // Guide card — flashier than the original minimal style. Hover lights
+  // up a gradient outline + lifts the card a few pixels + animates the
+  // icon. Subtle enough that it pairs with the featured cards above
+  // without competing.
+  .docs-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 22px 24px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0)),
+      var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    text-decoration: none;
+    color: inherit;
+    transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease;
+    overflow: hidden;
+
+    // Top rail — gradient strip that lights up on hover. Mirrors the
+    // roadmap phase card treatment.
+    &::before {
+      content: ""; position: absolute;
+      left: 0; right: 0; top: 0;
+      height: 2px;
+      background: linear-gradient(90deg, $mk-cy1, $mk-cy2 60%, transparent);
+      opacity: 0; transition: opacity .25s ease;
+    }
+
+    &:hover {
+      transform: translateY(-2px);
+      border-color: $mk-cy1;
+      box-shadow: 0 18px 40px -22px $mk-cy1;
+    }
+    &:hover::before { opacity: 0.85; }
+
+    .docs-card-ico {
+      font-size: 32px;
+      flex-shrink: 0;
+      transition: transform .25s ease;
+    }
+    &:hover .docs-card-ico { transform: scale(1.08) rotate(-3deg); }
+    .docs-card-body { flex: 1; }
+    .docs-card-title {
+      font-size: 15px; font-weight: 700; margin-bottom: 6px;
+      color: var(--text-primary);
+    }
+    .docs-card-desc {
+      font-size: 12px; color: var(--text-muted); line-height: 1.55;
+    }
+    .docs-card-arrow {
+      color: var(--text-muted);
+      font-size: 18px;
+      transition: color .25s ease, transform .25s ease;
+    }
+
+    &:hover .docs-card-arrow {
+      color: $mk-cy1;
+      transform: translateX(4px);
+    }
+  }
+}
+
+// Marketing pages (About / Roadmap) — share the hero / value / quick-grid
+// styles. Scoped under .docs-marketing so they don't leak into the docs
+// hub or guides.
+.docs-marketing {
+  // Orbs handled by the global .docs-marketing-bg fixed layer now.
+  // Keep this page itself flat so its content sits cleanly on top.
+  position: relative;
+  isolation: isolate;
+
+  .docs-breadcrumb {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+
+    a {
+      color: var(--text-muted);
+      text-decoration: none;
+      &:hover { color: var(--color-primary); }
+    }
+  }
+
+  // About hero — large gradient title + lede + CTA row.
+  .docs-about-hero {
+    padding: 24px 0 40px;
+    margin-bottom: 18px;
+  }
+  .docs-about-hero-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: $mk-cy1;
+    padding: 6px 14px; border-radius: 999px;
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.3);
+    margin-bottom: 18px;
+  }
+  .docs-about-hero-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor;
+    animation: docs-pulse 2s ease-in-out infinite;
+  }
+  .docs-about-hero h1 {
+    font-size: 64px; font-weight: 800; line-height: 1.0;
+    letter-spacing: -2px; margin: 0 0 18px;
+    background: linear-gradient(120deg, #ffffff 25%, #aab4c8 75%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  .docs-about-hero p {
+    font-size: 16.5px; color: var(--text-secondary);
+    max-width: 680px; line-height: 1.7;
+    margin: 0 0 28px;
+  }
+  .docs-about-hero-actions {
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .docs-about-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 9px 18px;
+    font-size: 13px; font-weight: 600;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: background .2s ease, border-color .2s ease;
+
+    &:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: var(--border-medium);
+    }
+  }
+  .docs-about-btn-primary {
+    background: linear-gradient(120deg, $mk-cy1, $mk-cy2);
+    border-color: transparent;
+    color: #ffffff;
+    &:hover { filter: brightness(1.08); }
+  }
+
+  // Section headings — used by all marketing pages.
+  .docs-about-section {
+    margin: 36px 0 16px;
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  // Value-prop grid — 4 cards. Border lights up on hover.
+  .docs-about-values {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .docs-about-value-card {
+    position: relative;
+    padding: 22px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    transition: transform .2s ease, border-color .2s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      border-color: var(--color-primary);
+    }
+  }
+  .docs-about-value-icon { font-size: 24px; margin-bottom: 10px; display: block; }
+  .docs-about-value-title { font-size: 14px; font-weight: 700; margin-bottom: 6px; color: var(--text-primary); }
+  .docs-about-value-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+
+  // Architecture placeholder — empty card with dashed border. Real diagram
+  // arrives in a follow-up; this hold keeps the page outline anchored.
+  .docs-about-arch-placeholder {
+    padding: 60px 40px;
+    border-radius: 12px;
+    border: 1px dashed var(--border-default);
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
+    text-align: center;
+  }
+  .docs-about-arch-eyebrow {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+  .docs-about-arch-text {
+    font-size: 14px; color: var(--text-secondary);
+  }
+
+  // Quick-start shortcuts — 4 destination cards. Same minimal style as
+  // the docs hub guides so the page closes consistently.
+  .docs-about-quick-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .docs-about-quick-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color .15s, background .15s;
+
+    &:hover {
+      border-color: var(--color-primary);
+      background: rgba(74,158,255,0.05);
+    }
+  }
+  .docs-about-quick-ico { font-size: 22px; flex-shrink: 0; }
+  .docs-about-quick-title { font-size: 13px; font-weight: 600; }
+  .docs-about-quick-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+  .docs-about-quick-arrow { color: var(--text-muted); font-size: 16px; margin-left: auto; }
+}
+
+// Roadmap — phase-band timeline ported from docs/TODO/mockup.html.
+// Marketing-tier visual treatment: large gradient hero, animated background
+// orbs, color-coded phase rails, and per-phase glow on hover. Sized to feel
+// like a product landing page, not an admin list.
+.docs-roadmap {
+  // Orbs moved up to the global .docs-marketing-bg fixed layer (rendered
+  // by AppLayout) so the gradient feel extends past the 1200px content
+  // cage and through the left/right empty bands. This page stays flat.
+  position: relative;
+  isolation: isolate;
+
+  .docs-roadmap-hero {
+    padding: 12px 0 36px;
+    margin-bottom: 16px;
+
+    h1 {
+      font-size: 56px; font-weight: 800; letter-spacing: -1.6px;
+      margin: 0 0 14px; line-height: 1.02;
+      background: linear-gradient(120deg, #ffffff 20%, $mk-cy2 90%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
+    p {
+      font-size: 16px; color: var(--text-secondary);
+      max-width: 680px; line-height: 1.7; margin: 0;
+    }
+  }
+
+  // Timeline rail — vertical line with phase dots tracking each card.
+  // Padding-left gives breathing room around the rail; the cards sit to
+  // the right and the dots are absolutely positioned onto the line.
+  .docs-tl {
+    position: relative;
+    padding-left: 28px;
+    margin-bottom: 56px;
+
+    &::before {
+      content: ""; position: absolute;
+      left: 0; top: 8px; bottom: 8px;
+      width: 2px;
+      background: linear-gradient(180deg,
+        rgba(245,158,11,0.6),
+        rgba(88,166,255,0.5),
+        rgba(163,113,247,0.5),
+        rgba(236,72,153,0.5),
+        rgba(63,185,80,0.5));
+      border-radius: 2px;
+    }
+  }
+  // Year marker — a solid filled circle with a halo ring + pulsing core
+  // to anchor each annual band visually. The pulse + multi-stop shadow
+  // make the dot look "alive" instead of a flat marker.
+  .docs-tl-year {
+    position: relative;
+    padding: 16px 0 8px;
+    margin-bottom: 18px;
+
+    &::before {
+      content: ""; position: absolute;
+      left: -34px; top: 24px;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #fff, $mk-cy4 70%);
+      box-shadow:
+        0 0 0 4px rgba(245,158,11,0.18),
+        0 0 0 10px rgba(245,158,11,0.06),
+        0 0 32px rgba(245,158,11,0.7);
+      animation: docs-tl-pulse 3s ease-in-out infinite;
+    }
+  }
+  @keyframes docs-tl-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(245,158,11,0.18), 0 0 0 10px rgba(245,158,11,0.06), 0 0 28px rgba(245,158,11,0.6); }
+    50%      { box-shadow: 0 0 0 6px rgba(245,158,11,0.22), 0 0 0 14px rgba(245,158,11,0.08), 0 0 40px rgba(245,158,11,0.85); }
+  }
+  .docs-tl-year-row {
+    display: flex; align-items: center; gap: 14px;
+
+    h2 {
+      margin: 0;
+      font-size: 38px; font-weight: 800;
+      letter-spacing: -0.8px;
+      background: linear-gradient(120deg, #ffffff 20%, $mk-cy4 100%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
+  }
+  .docs-tl-year-pill {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.4px;
+    padding: 5px 12px; border-radius: 999px;
+    background: rgba(245,158,11,0.14);
+    color: $mk-cy4;
+    border: 1px solid rgba(245,158,11,0.35);
+    box-shadow: 0 0 16px -4px rgba(245,158,11,0.4);
+  }
+
+  // Phase row — colored dot on the rail + matching --rail variable on
+  // the card so every accent (top stripe, list bullet, hover glow) tints
+  // to the same hue.
+  .docs-tl-phase {
+    position: relative;
+    margin: 0 0 26px;
+
+    &::before {
+      content: ""; position: absolute;
+      left: -33px; top: 30px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #fff 5%, var(--rail, var(--text-muted)) 70%);
+      transition: box-shadow .3s ease, transform .3s ease;
+      z-index: 1;
+    }
+    &.docs-tl-phase-p1 { --rail: #{$mk-cy1}; &::before { box-shadow: 0 0 0 4px rgba(88,166,255,0.16),  0 0 0 9px rgba(88,166,255,0.06),  0 0 28px rgba(88,166,255,0.65); } }
+    &.docs-tl-phase-p2 { --rail: #{$mk-cy2}; &::before { box-shadow: 0 0 0 4px rgba(163,113,247,0.16), 0 0 0 9px rgba(163,113,247,0.06), 0 0 28px rgba(163,113,247,0.65); } }
+    &.docs-tl-phase-p3 { --rail: #{$mk-cy3}; &::before { box-shadow: 0 0 0 4px rgba(236,72,153,0.16),  0 0 0 9px rgba(236,72,153,0.06),  0 0 28px rgba(236,72,153,0.65); } }
+    &.docs-tl-phase-p4 { --rail: #{$mk-cy5}; &::before { box-shadow: 0 0 0 4px rgba(63,185,80,0.16),   0 0 0 9px rgba(63,185,80,0.06),   0 0 28px rgba(63,185,80,0.65); } }
+
+    &:hover::before { transform: scale(1.15); }
+  }
+
+  // Phase card — full marketing treatment. Layered gradient background,
+  // animated rotating sheen, glowing top rail, accent-tinted left edge,
+  // and hover lift with phase-colored shadow.
+  .docs-tl-q-card {
+    position: relative;
+    padding: 26px 32px;
+    border-radius: 16px;
+    border: 1px solid var(--border-default);
+    background:
+      // Hue-tinted radial that picks up the --rail variable for each phase
+      radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--rail, transparent) 12%, transparent) 0%, transparent 55%),
+      linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0)),
+      var(--bg-card);
+    transition: transform .35s cubic-bezier(.2,.7,.2,1), border-color .25s ease, box-shadow .35s ease;
+    overflow: hidden;
+    isolation: isolate;
+
+    // Top rail — thicker + glow.
+    &::before {
+      content: ""; position: absolute;
+      left: 0; right: 0; top: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--rail, var(--color-primary)), transparent 75%);
+      box-shadow: 0 0 14px var(--rail, var(--color-primary));
+      opacity: 0.9;
+    }
+
+    // Sweeping shimmer — soft diagonal highlight that slides across the
+    // card on hover. Diagonal pseudo-element absolutely positioned wider
+    // than the card, translated off-screen at rest. Adds a "premium"
+    // moment on hover without being too loud.
+    &::after {
+      content: ""; position: absolute;
+      top: -50%; bottom: -50%;
+      left: -60%; width: 50%;
+      background: linear-gradient(115deg,
+        transparent 30%,
+        rgba(255,255,255,0.06) 50%,
+        transparent 70%);
+      transform: skewX(-18deg);
+      pointer-events: none;
+      transition: left .9s cubic-bezier(.2,.7,.2,1);
+      z-index: 0;
+    }
+    > * { position: relative; z-index: 1; }
+
+    &:hover {
+      transform: translateY(-4px);
+      border-color: var(--rail, var(--color-primary));
+      box-shadow:
+        0 28px 70px -28px var(--rail, var(--color-primary)),
+        0 0 0 1px var(--rail, var(--color-primary));
+    }
+    &:hover::after { left: 130%; }
+  }
+  .docs-tl-q-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .docs-tl-q-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 1.8px;
+    text-transform: uppercase; color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+  .docs-tl-q-num {
+    font-size: 32px; font-weight: 800;
+    letter-spacing: -0.6px;
+    background: linear-gradient(120deg, #ffffff 30%, var(--rail, $mk-cy1) 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+  }
+  .docs-tl-q-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
+    text-transform: uppercase;
+    padding: 5px 12px; border-radius: 999px;
+    background: rgba(245,158,11,0.14);
+    color: $mk-cy4;
+    border: 1px solid rgba(245,158,11,0.35);
+    box-shadow: 0 0 14px -4px rgba(245,158,11,0.4);
+    align-self: center;
+  }
+  .docs-tl-q-theme {
+    font-size: 14px; color: var(--text-secondary);
+    margin: 0 0 16px; line-height: 1.55;
+    font-style: italic;
+    opacity: 0.95;
+  }
+  // List items — custom bullet rendered as ::before (square, glowing)
+  // instead of native disc. Each phase tints its own bullet via --rail.
+  .docs-tl-q-list {
+    margin: 0; padding: 0;
+    list-style: none;
+    color: var(--text-secondary);
+    font-size: 13.5px; line-height: 1.9;
+
+    li {
+      position: relative;
+      padding-left: 22px;
+
+      &::before {
+        content: ""; position: absolute;
+        left: 4px; top: 0.65em;
+        width: 8px; height: 8px; border-radius: 50%;
+        background: var(--rail, var(--text-muted));
+        box-shadow: 0 0 12px var(--rail, transparent);
+      }
+    }
+  }
+
+  // Beyond — vision section. Dense grid, no status badges. Gradient
+  // heading to keep parity with the timeline tone.
+  .docs-tl-beyond {
+    position: relative;
+    padding: 32px 30px;
+    border-radius: 16px;
+    background:
+      radial-gradient(circle at 100% 0%, rgba(88,166,255,0.08), transparent 60%),
+      radial-gradient(circle at 0% 100%, rgba(236,72,153,0.08), transparent 60%),
+      var(--bg-card);
+    border: 1px solid var(--border-default);
+    margin-top: 24px;
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: 24px; font-weight: 800;
+      letter-spacing: -0.4px;
+      background: linear-gradient(120deg, #ffffff, $mk-cy1 80%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+    }
+  }
+  .docs-tl-beyond-sub {
+    font-size: 13.5px; color: var(--text-muted);
+    margin: 0 0 22px; line-height: 1.6;
+  }
+  .docs-tl-beyond-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+  }
+  .docs-tl-beyond-item {
+    padding: 16px 18px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    font-size: 12.5px; color: var(--text-secondary);
+    line-height: 1.6;
+    transition: transform .2s ease, border-color .2s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-medium);
+    }
+
+    b {
+      display: block;
+      font-size: 13.5px; font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+  }
+}
+
+.docs-guide {
+  min-width: 0;
+
+  .docs-breadcrumb {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+
+    a {
+      color: var(--text-muted);
+      text-decoration: none;
+      &:hover { color: var(--color-primary); }
+    }
+    span { margin: 0 4px; }
+  }
+
+  .docs-lede {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 0;
+    max-width: 720px;
+    line-height: 1.6;
+  }
+
+  .docs-body {
+    max-width: 860px;
+    min-width: 0;
+  }
+
+  .docs-section {
+    padding: 20px 0;
+    border-bottom: 1px solid var(--border-default);
+    min-width: 0;
+
+    &:last-child { border-bottom: none; }
+
+    h3 {
+      margin: 0 0 14px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    h4 {
+      margin: 18px 0 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    p {
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--text-primary);
+      margin: 6px 0;
+    }
+    ul {
+      font-size: 12px;
+      line-height: 1.8;
+      color: var(--text-primary);
+      padding-left: 20px;
+    }
+    code {
+      background: var(--bg-input);
+      border: 1px solid var(--border-default);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+      font-size: 11px;
+    }
+    pre {
+      background: #0a0e13;
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      padding: 12px 14px;
+      font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+      font-size: 11px;
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: auto;
+      white-space: pre;
+      margin: 8px 0;
+    }
+    a {
+      color: var(--color-primary);
+      text-decoration: none;
+      &:hover { text-decoration: underline; }
+    }
+    .note {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: rgba(74,158,255,0.06);
+      border: 1px solid rgba(74,158,255,0.3);
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+  }
+
+  .docs-callout {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+
+    &.verified {
+      background: rgba(163,113,247,0.08);
+      border: 1px solid rgba(163,113,247,0.25);
+      strong { color: #a371f7; }
+    }
+  }
+
+  .docs-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin: 8px 0;
+
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border-default);
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 11px;
+    }
+  }
+
+  // Interactive prompt block (install guide)
+  .installer-prompt {
+    margin: 12px 0 16px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+
+    .prompt-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 13px;
+    }
+    .prompt-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--color-primary);
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .prompt-q {
+      background: #0a0e13;
+      color: var(--text-primary);
+      padding: 10px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      line-height: 1.6;
+      margin: 0 0 8px;
+    }
+    .prompt-rec {
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      strong { color: var(--color-primary); margin-right: 4px; }
+      code { font-size: 10px; }
+    }
+    .prompt-warn {
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: rgba(210,153,34,0.08);
+      border: 1px solid rgba(210,153,34,0.3);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+  }
+
+  // fTPM CPU vendor block (Intel / AMD)
+  .cpu-block {
+    margin: 12px 0 16px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+
+    h4 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-primary);
+    }
+    p {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--text-primary);
+      line-height: 1.6;
+    }
+    ul {
+      padding-left: 18px;
+      margin: 0;
+      li {
+        padding: 2px 0;
+        font-size: 11px;
+        line-height: 1.7;
+      }
+    }
+    .note {
+      margin-top: 10px;
+      padding: 6px 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: rgba(210,153,34,0.06);
+      border: 1px solid rgba(210,153,34,0.25);
+      border-radius: 4px;
+    }
+  }
+}

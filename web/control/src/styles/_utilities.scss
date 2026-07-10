@@ -1,0 +1,101 @@
+// Layout / spacing / typography utility classes used in place of inline
+// `style={{...}}` for static values. Inline styles are kept only for
+// dynamic values that depend on props or state (gradient backgrounds,
+// progress percentages, status colors).
+//
+// Naming convention:
+//   .flex-*       — display: flex variants
+//   .gap-{n}      — gap in 4px scale (gap-4 = 4px, gap-6 = 6px, gap-8 = 8px, gap-16 = 16px)
+//   .p-{n}        — padding in px
+//   .py-{n}       — padding-y in px
+//   .mb-{n}       — margin-bottom in px
+//   .fs-{n}       — font-size in px
+//   .fw-{n}       — font-weight numeric
+//   .flex-1       — flex: 1
+//   .min-w-{n}    — min-width in px
+//
+// Keep this list small — only patterns that repeat 2+ times across files.
+
+// ─── Flex layouts ───
+.flex-row { display: flex; }
+.flex-center { display: flex; align-items: center; }
+.flex-between-center { display: flex; align-items: center; justify-content: space-between; }
+.flex-1 { flex: 1; }
+
+// ─── Gap (4px scale) ───
+.gap-6 { gap: 6px; }
+.gap-8 { gap: 8px; }
+.gap-10 { gap: 10px; }
+.gap-16 { gap: 16px; }
+
+// ─── Padding ───
+.p-16 { padding: 16px; }
+.p-24 { padding: 24px; }
+.py-15 { padding-top: 15px; padding-bottom: 15px; }
+
+// ─── Margin ───
+.mb-2 { margin-bottom: 2px; }
+.mb-6 { margin-bottom: 6px; }
+.mb-8 { margin-bottom: 8px; }
+.mb-12 { margin-bottom: 12px; }
+.mb-14 { margin-bottom: 14px; }
+.mb-20 { margin-bottom: 20px; }
+
+// ─── Min width ───
+.min-w-280 { min-width: 280px; }
+
+// ─── Margin top ───
+.mt-14 { margin-top: 14px; }
+.mt-16 { margin-top: 16px; }
+
+// ─── Margin right ───
+.mr-4 { margin-right: 4px; }
+
+// ─── Margin bottom 16 ───
+.mb-16 { margin-bottom: 16px; }
+
+// ─── Cursor / misc ───
+.cursor-default { cursor: default; }
+.font-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+// ─── Typography ───
+.fs-11 { font-size: 11px; }
+.fs-13 { font-size: 13px; }
+.fs-20 { font-size: 20px; }
+.fs-xs { font-size: 0.75rem; }
+
+.fw-600 { font-weight: 600; }
+
+// ─── Text colors (commonly used) ───
+.text-muted { color: var(--text-muted); }
+.text-primary { color: var(--text-primary); }
+.text-danger { color: var(--color-danger); }
+.text-success { color: var(--color-success); }
+.text-warning { color: var(--color-warning); }
+
+// ─── Install Provider banner (models page top callout) ───
+// Soft blue gradient nudging operators toward the install flow. Extracted
+// from inline styles in pages/models/index.jsx::InstallProviderBanner.
+.install-provider-banner {
+  background: linear-gradient(180deg, rgba(74,158,255,0.08) 0%, var(--bg-card) 60%);
+  border: 1px solid rgba(74,158,255,0.3);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.install-provider-banner-icon { font-size: 20px; }
+.install-provider-banner-body { flex: 1; }
+.install-provider-banner-title { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.install-provider-banner-desc { font-size: 11px; color: var(--text-muted); }
+.install-provider-banner-cta {
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--color-primary);
+  color: white;
+  border-radius: 6px;
+  text-decoration: none;
+}

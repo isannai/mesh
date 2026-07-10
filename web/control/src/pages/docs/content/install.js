@@ -1,0 +1,243 @@
+// Provider Install guide content, keyed by language.
+// Separated from the i18n JSON because docs have long prose blocks that
+// don't fit the flat key/value pattern.
+
+const ko = {
+  prereq: {
+    items: [
+      "NVIDIA GPU (RTX 3060 이상 권장)",
+      "NVIDIA Driver 535+ / CUDA 12.x (Installer 자동 설치 시도)",
+      "디스크 여유 공간 100GB+ (모델 파일)",
+      "인터넷 연결 (Gate / Broker 통신)",
+    ],
+    note: "Installer 실행 시 GPU / Driver / CUDA 상태를 자동 점검하며, 누락 시 설치를 계속할지 확인 프롬프트가 뜹니다. 누락된 컴포넌트는 수동 설치 후 재실행 권장.",
+  },
+  methods: {
+    intro_before: "Welcome",
+    intro_after: " 페이지에서 OS 를 선택하고 원하는 방식을 고릅니다.",
+    header: ["방식", "권장 사용자", "특징"],
+    rows: [
+      ["📜 설치 스크립트", "일반 사용자", ".ps1 / .sh 파일 다운로드 후 실행. 스크립트 내용 검토 가능."],
+      ["⚡ One-liner", "개발자", "터미널 한 줄로 자동 다운로드 + 실행. (broker endpoint 필요)"],
+      ["📦 Installer 직접", "수동 제어", "zip 다운로드 후 직접 해제 + 실행."],
+    ],
+  },
+  walk: {
+    step1_h: "1. 스크립트 다운로드",
+    step1_p: 'Welcome 페이지에서 "설치 스크립트" 선택 → install-iann.ps1 다운로드.',
+    step2_h: "2. 관리자 권한 PowerShell 실행",
+    step3_h: "3. 설치 위치 확인",
+    step3_p_a: "기본값 ",
+    step3_p_b: ". 다른 경로를 원하면 스크립트 변수 ",
+    step3_p_c: " 수정.",
+    step4_h: "4. 지갑 설정",
+    step4_p: "Installer 가 3가지 옵션 제시:",
+    step4_items: [
+      ["[1] 새 지갑 생성", " — Installer 가 키 생성 → PK 화면 표시 (백업 필수!)"],
+      ["[2] Owner Address 지정", " — MetaMask 등 외부 지갑 주소만 입력 (PK 안 받음)"],
+      ["[3] Keystore import", " — 기존 keystore 파일 재사용"],
+    ],
+    step5_h: "5. 설치 진행",
+    step5_p_a: "Gate 에서 Provider 컴포넌트를 다운로드 + 배치합니다.",
+    step5_p_b: "",
+  },
+  prompts: {
+    intro_a: "Installer 는 중간중간 사용자 입력을 받는 ",
+    intro_bold: "인터랙티브 모드",
+    intro_b: "로 동작합니다. 각 프롬프트가 무엇을 묻는지와 권장 답변을 정리했습니다. 자동화 스크립트에선 ",
+    intro_code: "--yes",
+    intro_c: " 플래그로 모든 확인 프롬프트를 기본값으로 통과할 수 있습니다 (지갑/PK 입력은 예외 — 항상 대화형).",
+    recommend: "권장:",
+    list: [
+      {
+        n: "1",
+        title: "설치 위치 확인",
+        q: "설치 위치: C:\\IANN. 계속 진행하시겠습니까? [Y/n]:",
+        recommend: "기본값 유지. 다른 경로를 원하면 --install-dir 플래그로 미리 지정 권장.",
+        warn: "Downloads / Desktop 폴더 감지 시 추가 경고가 표시됩니다.",
+      },
+      {
+        n: "2",
+        title: "GPU 환경 점검",
+        q: "GPU 환경 점검\n  ✓ NVIDIA GPU       RTX 3060 (12.0GB VRAM)\n  ✗ NVIDIA Driver    설치 안됨\n  ✗ CUDA             감지 안됨\n\n이대로 설치를 계속하시겠습니까? [y/N]:",
+        recommend: "모두 ✓ 면 자동 통과. 하나라도 ✗ 이면 기본값이 N (중단) — 누락된 항목 수동 설치 후 재실행 권장.",
+        warn: "GPU 없는 PC 에 Provider 를 설치하면 AI 서비스가 동작하지 않습니다.",
+      },
+      {
+        n: "3",
+        title: "Provider 지갑 설정 — 모드 선택",
+        q: "Provider 지갑 설정\n  [1] 새 지갑 생성 (권장 — Installer 가 생성)\n  [2] 기존 Owner Address 지정 (MetaMask 등 외부 지갑)\n  [3] 기존 Keystore 파일 import\n선택 [1]:",
+        recommend_multi: [
+          ["[1]", " 처음 노드 운영 → Installer 가 새 키 생성. PK 백업 필수."],
+          ["[2]", " MetaMask 등 외부 지갑 이미 있음 → 주소만 입력. PK 노출 안 함."],
+          ["[3]", " 이전에 만든 keystore 파일을 재사용할 때."],
+        ],
+      },
+      {
+        n: "3a",
+        title: "[모드 1] Private Key 백업",
+        q: "⚠ Private Key (지금 한 번만 표시 — 안전한 곳에 백업)\n  0xdeadbeef1234567890...\n\n백업 옵션:\n  [f] 파일로 저장 (확인 후 자동 삭제)\n  [s] 화면 다시 보기\n  [Enter] 백업 완료, 다음 단계",
+        recommend: "Password manager 에 복사 저장 → Enter. 분실 시 지갑 복구 불가 + 노드 수익 수령 불가.",
+      },
+      {
+        n: "3b",
+        title: "[모드 2] Owner Address 입력",
+        q: "Owner Address (0x + 40 hex, MetaMask 등):",
+        recommend: "MetaMask 에서 주소 복사해서 붙여넣기. 형식 검증 자동 (0x + 40 hex 문자).",
+      },
+      {
+        n: "3c",
+        title: "[모드 3] Keystore 파일 + 비밀번호",
+        q: "Keystore 파일 경로: /path/to/UTC--2026-XX.json\nKeystore 비밀번호:",
+        recommend: "절대 경로 또는 현재 디렉토리 기준 상대 경로. 비밀번호 틀리면 재시도 필요.",
+      },
+      {
+        n: "4",
+        title: "Keystore 비밀번호 설정 (모든 모드)",
+        q: "Keystore 비밀번호 입력 (8자 이상):\n비밀번호 재입력:",
+        recommend: "최소 8자. 이 비밀번호는 keystore 파일을 복호화할 때 다시 필요합니다. 분실 시 keystore 는 암호 해제 불가.",
+        warn: "비밀번호는 화면에 표시되지 않습니다 (no-echo).",
+      },
+    ],
+  },
+  trouble: {
+    h_smartscreen: "SmartScreen / Windows Defender 차단",
+    p_smartscreen: "현재 installer 는 code signing 전이라 경고창이 뜰 수 있습니다. 추가 정보 → 실행 클릭.",
+    h_firewall: "방화벽 prompt",
+    p_firewall: "Provider 는 Broker / Rendezvous 로 outbound HTTPS/QUIC 를 사용합니다. 허용.",
+    h_perm: "설치 위치 권한",
+    p_perm_a: "",
+    p_perm_code: "C:\\Program Files",
+    p_perm_b: " 등 시스템 경로는 관리자 권한 필요. 일반 사용자는 ",
+    p_perm_code2: "C:\\IANN",
+    p_perm_c: " 같은 루트 경로 또는 사용자 홈 아래 권장.",
+  },
+  next: {
+    intro: "설치 완료 후:",
+    run_title: "Provider 실행 가이드",
+    run_desc: " — 서비스 등록, 자동 시작",
+    tpm_title: "TPM 활성화 가이드",
+    tpm_desc: " — Verified Device 자격 (Faucet 2배)",
+  },
+};
+
+const en = {
+  prereq: {
+    items: [
+      "NVIDIA GPU (RTX 3060 or newer recommended)",
+      "NVIDIA Driver 535+ / CUDA 12.x (Installer tries to auto-install)",
+      "100GB+ free disk (model files)",
+      "Internet connection (Gate / Broker)",
+    ],
+    note: "The Installer auto-checks GPU / Driver / CUDA at runtime and asks whether to continue if any are missing. Install missing components manually, then re-run.",
+  },
+  methods: {
+    intro_before: "On the Welcome",
+    intro_after: " page, pick an OS and choose a download method.",
+    header: ["Method", "Target user", "Notes"],
+    rows: [
+      ["📜 Install Script", "General users", "Downloads a .ps1 / .sh you can review before running."],
+      ["⚡ One-liner", "Developers", "Terminal one-liner that downloads and runs. (requires broker endpoint)"],
+      ["📦 Installer Only", "Manual control", "Download the zip, extract, run by hand."],
+    ],
+  },
+  walk: {
+    step1_h: "1. Download the script",
+    step1_p: 'Pick "Install Script" on the Welcome page → install-iann.ps1 downloads.',
+    step2_h: "2. Run PowerShell as Administrator",
+    step3_h: "3. Confirm install location",
+    step3_p_a: "Default is ",
+    step3_p_b: ". To use a different path, edit the ",
+    step3_p_c: " variable at the top.",
+    step4_h: "4. Wallet setup",
+    step4_p: "Installer offers three options:",
+    step4_items: [
+      ["[1] Generate new wallet", " — Installer creates the key; PK is shown once (back it up!)"],
+      ["[2] Specify Owner Address", " — Paste your external wallet (e.g. MetaMask). No PK exchange."],
+      ["[3] Import keystore", " — Reuse an existing keystore file."],
+    ],
+    step5_h: "5. Install runs",
+    step5_p_a: "The Installer pulls Provider components from Gate.",
+    step5_p_b: "",
+  },
+  prompts: {
+    intro_a: "The Installer prompts you for input at several points — it runs in ",
+    intro_bold: "interactive mode",
+    intro_b: ". Below is what each prompt asks and our recommended answers. For scripted runs, the ",
+    intro_code: "--yes",
+    intro_c: " flag accepts every confirmation prompt with the default (wallet / PK entry is always interactive).",
+    recommend: "Recommended:",
+    list: [
+      {
+        n: "1",
+        title: "Confirm install location",
+        q: "Install location: C:\\IANN. Continue? [Y/n]:",
+        recommend: "Keep the default. To use a different path, pass --install-dir on the CLI instead.",
+        warn: "If Downloads / Desktop is detected, an extra warning appears.",
+      },
+      {
+        n: "2",
+        title: "GPU environment check",
+        q: "GPU check\n  ✓ NVIDIA GPU       RTX 3060 (12.0GB VRAM)\n  ✗ NVIDIA Driver    not installed\n  ✗ CUDA             not detected\n\nContinue anyway? [y/N]:",
+        recommend: "All ✓ auto-passes. Any ✗ defaults to N (abort) — install the missing component, then re-run.",
+        warn: "Installing Provider on a GPU-less PC means AI services will not run.",
+      },
+      {
+        n: "3",
+        title: "Provider wallet — mode select",
+        q: "Provider wallet setup\n  [1] Generate new wallet (recommended — Installer creates it)\n  [2] Specify existing Owner Address (MetaMask etc.)\n  [3] Import existing Keystore file\nChoice [1]:",
+        recommend_multi: [
+          ["[1]", " First-time node → Installer generates a key. PK backup required."],
+          ["[2]", " You already have a wallet (MetaMask) → enter only the address. PK never leaves your wallet."],
+          ["[3]", " Reuse an existing keystore file."],
+        ],
+      },
+      {
+        n: "3a",
+        title: "[Mode 1] Private Key backup",
+        q: "⚠ Private Key (shown once — back it up)\n  0xdeadbeef1234567890...\n\nBackup options:\n  [f] Save to file (auto-deleted after confirmation)\n  [s] Show again\n  [Enter] Backup done, next step",
+        recommend: "Copy into a password manager → Enter. Losing it = lost wallet + no revenue.",
+      },
+      {
+        n: "3b",
+        title: "[Mode 2] Enter Owner Address",
+        q: "Owner Address (0x + 40 hex, MetaMask etc.):",
+        recommend: "Paste the address from MetaMask. Format is validated (0x + 40 hex).",
+      },
+      {
+        n: "3c",
+        title: "[Mode 3] Keystore file + password",
+        q: "Keystore file path: /path/to/UTC--2026-XX.json\nKeystore password:",
+        recommend: "Absolute path or relative to the current directory. Wrong password means you must retry.",
+      },
+      {
+        n: "4",
+        title: "Keystore password (all modes)",
+        q: "Enter keystore password (8+ chars):\nConfirm password:",
+        recommend: "8 chars min. Needed any time the keystore is decrypted. Losing it = keystore is unrecoverable.",
+        warn: "Password input is hidden (no-echo).",
+      },
+    ],
+  },
+  trouble: {
+    h_smartscreen: "SmartScreen / Windows Defender block",
+    p_smartscreen: "The installer is not code-signed yet, so a warning may appear. Click More info → Run anyway.",
+    h_firewall: "Firewall prompt",
+    p_firewall: "Provider makes outbound HTTPS / QUIC connections to Broker / Rendezvous. Allow them.",
+    h_perm: "Install location permissions",
+    p_perm_a: "",
+    p_perm_code: "C:\\Program Files",
+    p_perm_b: " and other system paths need admin rights. For regular users, a root path like ",
+    p_perm_code2: "C:\\IANN",
+    p_perm_c: " or a path under the user's home directory is recommended.",
+  },
+  next: {
+    intro: "After install:",
+    run_title: "Provider Run Guide",
+    run_desc: " — service registration, auto-start",
+    tpm_title: "TPM Activation Guide",
+    tpm_desc: " — Verified Device status (2× Faucet)",
+  },
+};
+
+export default { ko, en };

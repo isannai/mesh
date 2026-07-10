@@ -1,0 +1,233 @@
+.settings-warn-banner {
+  background: var(--color-warning);
+  color: #000;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.settings-error-banner {
+  background: var(--color-danger);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+// Inline error text (used by load-failure short-circuit branches in
+// settings forms — distinct from the warning banner above).
+.settings-error {
+  color: var(--color-danger);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+// Empty-state for "service not installed on this node" (404 from
+// /provider/config?name=<svc>). Replaces the misleading
+// "Loading configuration..." that used to show indefinitely.
+.settings-empty-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  margin: 4px 0 6px;
+  code {
+    background: var(--bg-input);
+    padding: 1px 6px;
+    border-radius: var(--badge-radius);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--color-primary);
+    margin-left: 4px;
+  }
+}
+.settings-empty-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.settings-mono-input {
+  font-family: monospace;
+  width: 100%;
+}
+
+.settings-full-input {
+  width: 100%;
+}
+
+.settings-dropdown-wrap {
+  min-width: 150px;
+}
+
+.settings-save-bar {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.settings-mono-input-inline {
+  font-family: monospace;
+}
+
+.settings-mono-readonly {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-raw-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.settings-raw-toggle {
+  background: none;
+  border: 1px solid var(--border-medium);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-raw-textarea {
+  width: 100%;
+  min-height: 300px;
+  font-family: monospace;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--input-radius);
+  padding: 8px;
+  resize: vertical;
+}
+
+.settings-flex-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-value-wide {
+  min-width: 200px;
+}
+
+/* === CardsTab === */
+.settings-form { }
+
+.settings-form-empty {
+  padding: 30px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.settings-form-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 18px 20px;
+  max-width: 720px;
+}
+
+.settings-form-section-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.settings-form-section-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0 0 16px;
+}
+
+.cards-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 16px;
+}
+
+.cards-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover { background: rgba(74, 158, 255, 0.04); }
+
+  input[type="checkbox"] {
+    margin-top: 3px;
+    cursor: pointer;
+  }
+}
+
+.cards-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.cards-toggle-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cards-toggle-desc {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.settings-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.settings-form-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.api-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.api-presets-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.cards-toggle-row-locked {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.cards-toggle-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgba(74, 158, 255, 0.12);
+  color: var(--color-primary);
+  border-radius: 3px;
+  vertical-align: middle;
+}

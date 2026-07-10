@@ -1,0 +1,553 @@
+/* Profiles tab — service-grouped profile management.
+   Shape mirrors docs/TODO/profiles-lora-mockup.html. */
+
+.pt-root {
+  padding: 4px 0;
+}
+
+.pt-intro-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.pt-intro {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  flex: 1;
+  line-height: 1.55;
+}
+.pt-intro-note {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+
+  code {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 11px;
+    padding: 0 4px;
+    border-radius: var(--badge-radius);
+    background: rgba(139,148,158,0.12);
+    color: var(--text-primary);
+  }
+}
+.pt-refresh-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 0;
+  padding: 0;
+  font-size: 0.9rem;
+  line-height: 32px;
+  text-align: center;
+  border-radius: var(--badge-radius);
+  background: rgba(74,158,255,0.15);
+  border: 1px solid rgba(74,158,255,0.3);
+  color: #4a9eff;
+  cursor: pointer;
+  box-sizing: border-box;
+  flex-shrink: 0;
+
+  &:disabled { opacity: 0.6; cursor: not-allowed; }
+}
+
+.pt-empty {
+  padding: 30px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-light);
+  border-radius: 8px;
+
+  code {
+    background: var(--bg-input-alt);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--color-primary);
+  }
+}
+
+.pt-svc-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.pt-svc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card-header, var(--bg-input-alt));
+  border-bottom: 1px solid var(--border-light);
+}
+
+.pt-svc-icon { font-size: 16px; }
+.pt-svc-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.pt-svc-active {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pt-active-pill {
+  background: var(--color-primary-alpha, rgba(88,166,255,0.12));
+  color: var(--color-primary);
+  padding: 2px 10px;
+  border-radius: var(--badge-radius);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.pt-svc-empty { color: var(--text-muted); font-style: italic; }
+.pt-svc-readonly {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: rgba(139,148,158,0.12);
+  border: 1px solid rgba(139,148,158,0.25);
+  padding: 1px 6px;
+  border-radius: var(--badge-radius);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.pt-svc-empty-row {
+  padding: 16px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.pt-row-list { /* container for profile rows */ }
+
+.pt-row {
+  border-bottom: 1px solid var(--border-light);
+  &:last-child { border-bottom: 0; }
+}
+.pt-row.expanded {
+  background: var(--bg-hover-soft, rgba(88,166,255,0.04));
+}
+.pt-row-head {
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  &:hover { background: var(--bg-hover-soft, rgba(88,166,255,0.06)); }
+}
+.pt-arrow {
+  color: var(--text-muted);
+  font-size: 10px;
+  width: 12px;
+  transition: transform 0.15s;
+  &.open { transform: rotate(90deg); color: var(--color-primary); }
+}
+.pt-row-name {
+  font-family: ui-monospace, "SF Mono", monospace;
+  color: var(--color-purple, #d2a8ff);
+  font-size: 13px;
+  font-weight: 500;
+}
+.pt-row-label {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  margin-left: 4px;
+}
+.pt-row-tags {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  align-items: center;
+}
+
+.pt-tag {
+  padding: 2px 8px;
+  border-radius: var(--badge-radius);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.pt-tag-arch {
+  background: rgba(210,168,255,0.14);
+  color: var(--color-purple, #d2a8ff);
+  border: 1px solid rgba(210,168,255,0.3);
+}
+.pt-tag-active {
+  background: rgba(63,185,80,0.14);
+  color: var(--color-success);
+  border: 1px solid rgba(63,185,80,0.3);
+}
+.pt-tag-warn {
+  background: rgba(231,169,49,0.14);
+  color: var(--color-warning);
+  border: 1px solid rgba(231,169,49,0.3);
+}
+
+.pt-row-detail {
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--border-light);
+}
+
+.pt-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.pt-detail-card {
+  background: var(--bg-input-alt);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 12px 14px;
+
+  h4 {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 8px;
+  }
+}
+.pt-detail-card-full { grid-column: 1 / -1; }
+.pt-detail-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 6px 0;
+  code {
+    background: var(--bg-input);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--color-primary);
+    font-style: normal;
+  }
+}
+.pt-detail-link {
+  font-size: 12px;
+  color: var(--color-primary);
+  margin-top: 6px;
+  cursor: pointer;
+  &:hover { text-decoration: underline; }
+}
+
+.pt-kv {
+  display: flex;
+  padding: 3px 0;
+  font-size: 12.5px;
+  align-items: baseline;
+}
+.pt-kv-key {
+  color: var(--text-muted);
+  min-width: 110px;
+}
+.pt-kv-val {
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  &.mono { font-family: ui-monospace, "SF Mono", monospace; }
+  &.small { font-size: 11.5px; }
+}
+
+.pt-row-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.pt-row-actions-end { margin-left: auto; }
+.pt-active-note {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-style: italic;
+}
+
+/* LoRA list (sd-api per-arch) — flat rows. */
+.pt-section-hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+
+  code {
+    background: var(--bg-input);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--color-primary);
+  }
+}
+.pt-lora-list {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pt-lora-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12.5px;
+
+  &:last-child { border-bottom: 0; }
+  &:hover { background: var(--bg-hover-soft, rgba(88,166,255,0.04)); }
+}
+.pt-lora-name {
+  font-family: ui-monospace, "SF Mono", monospace;
+  color: var(--color-purple, #d2a8ff);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pt-lora-source {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: var(--badge-radius);
+  font-weight: 600;
+}
+.pt-lora-source-civitai {
+  background: rgba(74,222,128,0.14);
+  color: #4ade80;
+  border: 1px solid rgba(74,222,128,0.3);
+}
+.pt-lora-source-huggingface {
+  background: rgba(255,213,26,0.14);
+  color: #ffd93d;
+  border: 1px solid rgba(255,213,26,0.3);
+}
+.pt-lora-source-imported {
+  background: rgba(139,148,158,0.14);
+  color: var(--text-muted);
+  border: 1px solid rgba(139,148,158,0.3);
+}
+.pt-lora-size {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  min-width: 70px;
+  text-align: right;
+}
+.pt-lora-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* Default checkbox + label on the left of each LoRA row. */
+.pt-lora-default-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  min-width: 120px;
+
+  input { accent-color: #3fb950; }
+}
+.pt-lora-default-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  &.on { color: #3fb950; }
+  &.off { color: var(--text-muted); }
+}
+
+.pt-lora-row.is-default { background: rgba(63,185,80,0.04); }
+.pt-lora-row.is-default:hover { background: rgba(63,185,80,0.08); }
+
+/* Inline weight slider on each default row. */
+.pt-lora-weight-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  &.muted { opacity: 0.35; }
+}
+.pt-lora-weight-label { color: var(--text-muted); font-size: 11.5px; }
+.pt-lora-weight-slider { width: 90px; accent-color: var(--color-primary); }
+.pt-lora-weight-val {
+  color: var(--color-primary);
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* Header row holding the section hint + Disable toggle. */
+.pt-lora-head-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* "Disable LoRA on this profile" toggle button. */
+.pt-lora-disable-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--badge-radius);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  height: 28px;
+
+  .pt-lora-disable-track {
+    width: 26px;
+    height: 14px;
+    background: var(--border-medium);
+    border-radius: 999px;
+    position: relative;
+    transition: background 0.15s;
+  }
+  .pt-lora-disable-track::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    transition: 0.15s;
+  }
+  &.on {
+    border-color: rgba(248,81,73,0.4);
+    color: var(--color-danger);
+    .pt-lora-disable-track { background: var(--color-danger); }
+    .pt-lora-disable-track::after { left: 14px; background: #fff; }
+  }
+  &:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.pt-lora-list-muted { opacity: 0.5; pointer-events: none; }
+
+/* Banner when LoRA is fully disabled on the profile. */
+.pt-lora-disabled-banner {
+  background: rgba(248,81,73,0.08);
+  border: 1px solid rgba(248,81,73,0.4);
+  border-radius: var(--badge-radius);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--color-danger);
+  margin-bottom: 10px;
+
+  code {
+    background: var(--bg-input);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-size: 11.5px;
+  }
+}
+
+/* Footer line below the LoRA list. */
+.pt-lora-list-foot {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 14px;
+
+  a { color: var(--color-primary); text-decoration: none; }
+}
+.pt-lora-foot-link { margin-left: auto; }
+
+.btn.btn-icon-sm {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  color: var(--text-muted);
+
+  &:hover { color: var(--color-primary); border-color: var(--border-light); }
+  &.btn-danger:hover { color: var(--color-danger); border-color: rgba(248,81,73,0.3); }
+}
+
+/* LoRA picker (llm-api single-select). */
+.pt-lora-picker-block {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.pt-lora-picker-select {
+  flex: 1;
+  min-width: 240px;
+  background: var(--bg-input-alt);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.pt-lora-scale-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pt-lora-scale-input {
+  width: 64px;
+  background: var(--bg-input-alt);
+  border: 1px solid var(--border-input);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--color-primary);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.pt-lora-restart-warn {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: rgba(231,169,49,0.08);
+  border: 1px solid rgba(231,169,49,0.3);
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: var(--color-warning);
+  flex-basis: 100%;
+}
+
+/* Compact "+ Add Profile" button — sit alongside service header. */
+.btn.btn-add-sm {
+  background: rgba(63,185,80,0.12);
+  color: var(--color-success);
+  border: 1px solid rgba(63,185,80,0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-weight: 600;
+
+  &:hover {
+    background: rgba(63,185,80,0.2);
+    border-color: rgba(63,185,80,0.5);
+  }
+}
+.btn.btn-sm {
+  font-size: 12px;
+  padding: 5px 10px;
+}
