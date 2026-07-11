@@ -296,6 +296,19 @@ func (p *Provider) Run(ctx context.Context) error {
 	httpMux.HandleFunc("/installer/", p.HandleProviderHTTP)
 	httpMux.HandleFunc("/service/", p.HandleProviderHTTP)
 	httpMux.HandleFunc("/svc/", p.HandleServiceProxy)
+	// Auto-wire reload — isannd POSTs here after docker create/start/restart so a
+	// newly-installed engine is served without restarting station.
+	httpMux.HandleFunc("/internal/reload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := p.Reload(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 	srv := &http.Server{
 		Addr:              p.Cfg.ListenAddr,
 		Handler:           httpMux,
@@ -306,6 +319,33 @@ func (p *Provider) Run(ctx context.Context) error {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("provider HTTP listen: %w", err)
 	}
+	return nil
+}
+
+// Reload re-derives the service set (apps/ engines auto-wire + station.json
+// overrides, via tunnel.LoadConfig) and swaps it live, so an engine installed or
+// started after station boot is served without a restart. Only `services` is
+// swapped — listen_addr / mode / queue stay put. In-flight jobs are unaffected
+// (SetServices is a guarded pointer swap). Called by the /internal/reload door
+// (isannd triggers it after docker create/start/restart).
+func (p *Provider) Reload() error {
+	p.CfgMu.RLock()
+	path := p.Cfg.ConfigFile
+	p.CfgMu.RUnlock()
+	if path == "" {
+		return fmt.Errorf("no config file to reload")
+	}
+	fresh, err := tunnel.LoadConfig(path) // re-derives apps/ engines + merges station.json
+	if err != nil {
+		return fmt.Errorf("reload config: %w", err)
+	}
+	p.CfgMu.Lock()
+	p.Cfg.Services = fresh.Services
+	p.CfgMu.Unlock()
+	if p.jobsHandler != nil {
+		p.jobsHandler.SetServices(fresh.Services)
+	}
+	p.Log.Log(glog.Lifecycle, "[station] reloaded services (%d) — auto-wire", len(fresh.Services))
 	return nil
 }
 

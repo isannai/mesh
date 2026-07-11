@@ -28,13 +28,12 @@ func logManifestErrOnce(svcName, format string, args ...interface{}) {
 }
 
 // loadServiceManifest reads and validates the engine manifest for a service
-// entry. Resolution order:
+// entry. Resolution order (S1 marker pivot: unified apps/ tree first):
 //
-//  1. <install_root>/manifests/<svc.Name>.json  ─ canonical (file stem
-//     matches the container name; same path isannd uses for its docker probe)
-//  2. <install_root>/manifests/<svc.Engine>.json ─ when an explicit engine
-//     name is set on the service entry (e.g. svc.Name="sd-api",
-//     svc.Engine="sd")
+//  1. apps/<svc.Name>/manifest.json · apps/<svc.Engine>/manifest.json ─ engine
+//     in the unified artifacts/addon/apps/ tree (canonical target)
+//  2. <root>/manifests/<svc.Name>.json · <root>/manifests/<svc.Engine>.json ─
+//     legacy flat (same path isannd uses for its docker probe)
 //  3. <packagesDir>/engines/<svc.Engine>/manifest.json ─ legacy wrapped
 //     layout; kept so older deployments keep working until they migrate
 //
@@ -42,6 +41,13 @@ func logManifestErrOnce(svcName, format string, args ...interface{}) {
 // service so the 1 Hz heartbeat loop doesn't flood the log.
 func loadServiceManifest(svc setup.ServiceEntry, packagesDir string) *manifest.Manifest {
 	candidates := []string{}
+	// Unified apps/ tree first (engine = apps/<name>/manifest.json).
+	if svc.Name != "" {
+		candidates = append(candidates, manifest.AppManifestPath(svc.Name))
+	}
+	if svc.Engine != "" {
+		candidates = append(candidates, manifest.AppManifestPath(svc.Engine))
+	}
 	if svc.Name != "" {
 		candidates = append(candidates, manifest.ManifestPath(svc.Name))
 	}

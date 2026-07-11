@@ -15,6 +15,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/daesob/http3proxy/pkg/auth"
@@ -41,9 +42,13 @@ func clampTimeoutSecs(raw string) int {
 // JobsHandler answers /v1/jobs* and /outputs/* requests against a
 // QueueManager + Storage pair. Construct one per Provider instance.
 type JobsHandler struct {
-	mgr      *queue.Manager
-	storage  *queue.Storage
-	services []setup.ServiceEntry // snapshot from Provider.Cfg.Services
+	mgr     *queue.Manager
+	storage *queue.Storage
+
+	// services is the live service set; swapped by SetServices on reload
+	// (auto-wire), read under svcMu by lookupService on each submit.
+	svcMu    sync.RWMutex
+	services []setup.ServiceEntry
 
 	// apiFor resolves a service's manifest api block (M1). Used at submit time
 	// to map generic run-params onto the engine body, select a run variant by
@@ -709,12 +714,22 @@ func (h *JobsHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // lookupService returns the ServiceEntry by name. False when not found.
 func (h *JobsHandler) lookupService(name string) (setup.ServiceEntry, bool) {
+	h.svcMu.RLock()
+	defer h.svcMu.RUnlock()
 	for _, s := range h.services {
 		if s.Name == name {
 			return s, true
 		}
 	}
 	return setup.ServiceEntry{}, false
+}
+
+// SetServices swaps the live service set (auto-wire reload). In-flight jobs are
+// unaffected — only future name→service resolutions see the new set.
+func (h *JobsHandler) SetServices(svcs []setup.ServiceEntry) {
+	h.svcMu.Lock()
+	h.services = svcs
+	h.svcMu.Unlock()
 }
 
 // lookupJob scans all queues for a job by ID.

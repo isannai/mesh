@@ -4,13 +4,5 @@
     "node_bridge_addr": "http://127.0.0.1:8443",
     "rv_control_addr":  "127.0.0.1:19100"
   },
-  "services": [
-    {"name": "sd-api",   "engine": "sd",    "addr": "127.0.0.1:7860",  "enable": true,
-     "queue": { "max_queue": 5, "concurrency": 1 } },
-    {"name": "llm-api",  "engine": "llama", "addr": "127.0.0.1:7862",  "enable": true,
-     "queue": { "max_queue": 50, "concurrency": 1 } },
-    {"name": "vllm-api", "engine": "vllm", "addr": "127.0.0.1:7864", "enable": true,
-     "queue": { "max_queue": 100, "concurrency": 1, "save_to_disk": false } }
-  ],
   "expose_hardware_info": true
 }
