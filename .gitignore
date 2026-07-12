@@ -31,8 +31,9 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Build output (mesh app zips)
-build/*/out-mesh/
+# Build output (build/*/out, out-mesh, out-server, ...)
+build/*/out/
+build/*/out-*/
 
 # Web (control SPA)
 web/control/node_modules/
