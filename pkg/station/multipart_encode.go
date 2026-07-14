@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/engine/manifest"
 )
 
 // encodeEngineBody serializes a JSON engine body into the wire format declared

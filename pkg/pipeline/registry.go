@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/daesob/http3proxy/pkg/glog"
+	"github.com/isannai/mesh/pkg/glog"
 )
 
 // InputItem is one upstream value reaching a node's input handle.

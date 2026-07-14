@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // Factory builds a Config and ProcessFunc for a given service. Phase 3
@@ -109,25 +109,6 @@ func (m *Manager) AllStats() map[string]Stats {
 		out[name] = q.Stats()
 	}
 	return out
-}
-
-// UpdateJobProgress finds the job across every active queue and updates
-// its step/total/progress fields. No-op when the job isn't running. Used
-// by the engine-runner → provider progress callback path.
-func (m *Manager) UpdateJobProgress(jobID string, step, total int) bool {
-	m.mu.RLock()
-	queues := make([]*Queue, 0, len(m.queues))
-	for _, q := range m.queues {
-		queues = append(queues, q)
-	}
-	m.mu.RUnlock()
-
-	for _, q := range queues {
-		if q.UpdateJobProgress(jobID, step, total) {
-			return true
-		}
-	}
-	return false
 }
 
 // Names returns the service names of every active queue, in unspecified

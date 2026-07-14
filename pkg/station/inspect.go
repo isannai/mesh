@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/profile"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/profile"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // extractInspect builds the (values, labels, order) triple advertised by a

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/glog"
+	"github.com/isannai/mesh/pkg/glog"
 )
 
 // Config tunes a single Queue instance (one service). Zero values fall back

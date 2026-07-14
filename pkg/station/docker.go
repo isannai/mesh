@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // docker.go — provider 가 isannd 의 docker 컨트롤러를 호출해서 서비스 컨테이너
@@ -150,93 +150,6 @@ func buildDockerStartBody(svc setup.ServiceEntry, m *manifest.Manifest) dockerSt
 		}
 	}
 	return body
-}
-
-// dockerPSResponse mirrors cmd/isannd/admin_docker.go's handleDockerPS
-// response shape. Each entry has the fields broker UI needs to render
-// a running indicator on the service card.
-type dockerPSResponse struct {
-	Containers []dockerInspectInfo `json:"containers"`
-}
-
-type dockerInspectInfo struct {
-	ID      string `json:"ID,omitempty"`
-	Name    string `json:"Name"`
-	Image   string `json:"Image,omitempty"`
-	Running bool   `json:"Running"`
-}
-
-// dockerPS returns the isannd-reported state for every container on the
-// host. Callers (provider's /processes handler) filter by service name.
-func (p *Provider) dockerPS() ([]dockerInspectInfo, error) {
-	url := p.isanndInternalURL() + "/internal/api/docker/ps"
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := isanndDockerClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("isannd docker ps: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("isannd docker ps returned %d: %s", resp.StatusCode, string(body))
-	}
-	var out dockerPSResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("isannd docker ps decode: %w", err)
-	}
-	return out.Containers, nil
-}
-
-// dockerProbeReply mirrors cmd/isannd/admin_docker.go's dockerProbeResponse.
-// HTTP-only: isannd no longer runs `docker inspect` on each probe (it was
-// keeping WSL alive on Windows after `isann docker shutdown`). The "booting"
-// distinction is gone — engines either respond on HTTP or they don't.
-type dockerProbeReply struct {
-	HTTPProbed bool   `json:"http_probed"`
-	HTTPOK     bool   `json:"http_ok"`
-	HTTPStatus int    `json:"http_status,omitempty"`
-	ElapsedMS  int64  `json:"elapsed_ms,omitempty"`
-	HTTPError  string `json:"http_error,omitempty"`
-	ProbeURL   string `json:"probe_url,omitempty"`
-	Model      string `json:"model,omitempty"`
-}
-
-// dockerProbe asks isannd for the engine's HTTP readiness. Used by the
-// service watcher for engines launched as docker containers (launcher=docker).
-// Bypasses the provider's own pollServiceExternal because isannd already
-// loads the manifest, knows the container's host-published port, and extracts
-// model_path from the ready_check body.
-//
-// Returns (info, alive, error). alive == HTTPOK — we no longer distinguish
-// "container running but engine not ready" from "container stopped"; both
-// surface as alive=false.
-func (p *Provider) dockerProbe(svc setup.ServiceEntry) (setup.ServiceInfo, bool, error) {
-	url := p.isanndInternalURL() + "/internal/api/docker/probe/" + svc.Name
-	resp, err := isanndDockerClient.Get(url)
-	if err != nil {
-		return setup.ServiceInfo{Name: svc.Name}, false, fmt.Errorf("isannd docker probe %s: %w", svc.Name, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return setup.ServiceInfo{Name: svc.Name}, false, fmt.Errorf("isannd docker probe %s returned %d: %s", svc.Name, resp.StatusCode, string(body))
-	}
-	var reply dockerProbeReply
-	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
-		return setup.ServiceInfo{Name: svc.Name}, false, fmt.Errorf("isannd docker probe %s decode: %w", svc.Name, err)
-	}
-	info := setup.ServiceInfo{
-		Name:        svc.Name,
-		Type:        svc.Type,
-		Engine:      svc.Engine,
-		Launcher:    "docker",
-		Model:       reply.Model,
-		ServerReady: reply.HTTPOK,
-	}
-	return info, reply.HTTPOK, nil
 }
 
 // callIsanndDocker is a thin POST helper. 30s timeout — `docker run -d`

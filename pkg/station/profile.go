@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/tunnel"
 	"github.com/quic-go/quic-go"
 )
 

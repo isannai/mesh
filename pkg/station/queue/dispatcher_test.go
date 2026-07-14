@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // addrFromTestServer extracts host:port from an httptest.Server URL.

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // vllmManifest builds a manifest similar to vllm.json for tests.

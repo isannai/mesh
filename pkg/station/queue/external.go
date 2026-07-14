@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // ExternalMonitor tracks an external engine's in-flight request count by

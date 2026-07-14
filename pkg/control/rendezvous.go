@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/signal"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/signal"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // Fallback cadences used when RV's register_ack has not yet been received

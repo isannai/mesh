@@ -149,13 +149,3 @@ func (j *Job) MarshalJSON() ([]byte, error) {
 		ChunkCount int `json:"chunk_count"`
 	}{(*alias)(j), n})
 }
-
-// effectiveStatus returns the status with the sd-api "preparing" alias
-// applied: a running job that has not yet emitted any step counts as
-// preparing so the UI can distinguish "warming up" from "stepping".
-func (j *Job) effectiveStatus() JobStatus {
-	if j.Status == StatusRunning && j.Total == 0 {
-		return StatusPreparing
-	}
-	return j.Status
-}

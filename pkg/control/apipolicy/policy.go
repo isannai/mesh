@@ -57,13 +57,3 @@ func (p *Policy) EnabledFeatures() []string {
 	}
 	return out
 }
-
-// AsMap returns a fresh copy of the enabled state as a map of FeatureToggle.
-// Used by the Settings UI to populate the toggle list.
-func (p *Policy) AsMap() map[string]FeatureToggle {
-	out := make(map[string]FeatureToggle, len(AllFeatures))
-	for _, f := range AllFeatures {
-		out[f] = FeatureToggle{Enabled: p.enabled[f]}
-	}
-	return out
-}

@@ -33,7 +33,7 @@ set CGO_ENABLED=0
 
 REM Station/ControlVersion live in pkg/setup, pulled from GLink via the module
 REM replace; ldflags target the real import path so -X resolves as in GLink.
-set "PKG=github.com/daesob/http3proxy/pkg/setup"
+set "PKG=github.com/isannai/mesh/pkg/setup"
 set "LDFLAGS=-X %PKG%.StationVersion=%VER% -X %PKG%.ControlVersion=%VER%"
 
 set "OUT=build\linux\out-mesh"

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/isannai/mesh/pkg/station/queue"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // stubFactory builds a Manager that forwards to a single in-memory mock

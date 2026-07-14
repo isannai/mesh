@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // syncManager manages sync tokens and cached snapshots.
@@ -349,32 +349,6 @@ func (sm *syncManager) GetSnapshot(workDir, token string) (*SyncSnapshot, error)
 	return snap, nil
 }
 
-// Cleanup removes expired snapshots from memory.
-func (sm *syncManager) Cleanup() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	for token, snap := range sm.snapshots {
-		if time.Now().After(snap.ExpiresAt) {
-			delete(sm.snapshots, token)
-		}
-	}
-}
-
-// RunCleanupLoop periodically cleans up expired snapshots.
-func (sm *syncManager) RunCleanupLoop(stop <-chan struct{}) {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			sm.Cleanup()
-		case <-stop:
-			return
-		}
-	}
-}
-
 // fileEntry holds path + size without hash (used for phase 1 listing).
 type fileEntry struct {
 	Path string
@@ -411,58 +385,6 @@ func listWorkDir(workDir string) ([]fileEntry, error) {
 			return nil
 		}
 		files = append(files, fileEntry{Path: rel, Size: info.Size()})
-		return nil
-	})
-
-	return files, err
-}
-
-// scanWorkDir recursively scans workDir and returns file entries with SHA256 hashes.
-func scanWorkDir(workDir string) ([]SnapshotFile, error) {
-	var files []SnapshotFile
-
-	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // skip unreadable
-		}
-
-		rel, err := filepath.Rel(workDir, path)
-		if err != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-
-		if rel == "." {
-			return nil
-		}
-
-		// Check excluded dirs
-		topDir := strings.SplitN(rel, "/", 2)[0]
-		if excludedDirs[topDir] {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		if isExcludedFile(rel) {
-			return nil
-		}
-
-		hash, err := hashFile(path)
-		if err != nil {
-			return nil // skip unhashable files
-		}
-
-		files = append(files, SnapshotFile{
-			Path: rel,
-			Hash: hash,
-			Size: info.Size(),
-		})
 		return nil
 	})
 

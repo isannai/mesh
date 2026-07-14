@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/auth"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/auth"
+	"github.com/isannai/mesh/pkg/tunnel"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 

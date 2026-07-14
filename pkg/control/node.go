@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/isannai/mesh/pkg/control/apipolicy"
-	"github.com/daesob/http3proxy/pkg/glog"
+	"github.com/isannai/mesh/pkg/glog"
 )
 
 // extractSubscribePollFromSvcRest peels /v1/jobs/subscribe/{id} or

@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/isannai/mesh/pkg/station"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 func main() {

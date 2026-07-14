@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/isannai/mesh/pkg/control/apipolicy"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // handleAPIPolicy returns the current effective API policy. Public — clients

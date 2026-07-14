@@ -21,8 +21,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // engineEnvConcurrency resolves a service's concurrent-slot count from its

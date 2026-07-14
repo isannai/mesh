@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/auth"
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/auth"
+	"github.com/isannai/mesh/pkg/engine/manifest"
 	"github.com/isannai/mesh/pkg/station/queue"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // clampTimeoutSecs parses a ?timeout=<seconds> value and clamps it to a sane

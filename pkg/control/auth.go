@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/auth"
+	"github.com/isannai/mesh/pkg/auth"
 )
 
 // handleAuthVerify validates an EOA-signed message and returns the resolved role.

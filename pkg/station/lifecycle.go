@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/glog"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/signal"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/glog"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/signal"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // runServiceWatcher is the Phase 1-C lifecycle state machine. Every second

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // helper: build a manifest with the given queue defaults.

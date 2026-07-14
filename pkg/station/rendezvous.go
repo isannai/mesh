@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/glog"
+	"github.com/isannai/mesh/pkg/glog"
 	"github.com/isannai/mesh/pkg/station/queue"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/signal"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/signal"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // initStaticHardware caches the provider's static hardware spec once,

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/glog"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/glog"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // verifyWithProvider asks the Provider's /provider/auth-verify endpoint

@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // manifestErrLogged dedupes per-service manifest load/validate error logs.

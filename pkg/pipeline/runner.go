@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/glog"
+	"github.com/isannai/mesh/pkg/glog"
 )
 
 // Runner executes pipeline graphs. It holds the entity registry and

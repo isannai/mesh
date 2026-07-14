@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/auth"
-	"github.com/daesob/http3proxy/pkg/glog"
-	"github.com/daesob/http3proxy/pkg/installclient"
-	"github.com/daesob/http3proxy/pkg/profile"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/auth"
+	"github.com/isannai/mesh/pkg/glog"
+	"github.com/isannai/mesh/pkg/installclient"
+	"github.com/isannai/mesh/pkg/profile"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/tunnel"
 	"github.com/quic-go/quic-go"
 )
 
@@ -1378,11 +1378,4 @@ func extractBearerToken(req *http.Request) string {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
 	return ""
-}
-
-// removeFileQuiet removes a file silently.
-func removeFileQuiet(path string) {
-	if path != "" {
-		_ = os.Remove(path)
-	}
 }

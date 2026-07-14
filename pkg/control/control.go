@@ -8,13 +8,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/isannai/mesh/pkg/control/apipolicy"
-	"github.com/daesob/http3proxy/pkg/installclient"
+	"github.com/isannai/mesh/pkg/installclient"
 	"github.com/isannai/mesh/pkg/pipeline"
 	"github.com/isannai/mesh/pkg/pipeline/entities"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // Broker is the Control Center: it serves the console SPA and reverse-proxies
@@ -29,11 +28,6 @@ type Broker struct {
 	pipelineRegistry *pipeline.Registry
 	pipelineRunner   *pipeline.Runner
 	pipelineJobs     *pipeline.JobStore
-
-	// Session issued by RV on signed FullSync register. Used to HMAC UDP
-	// heartbeat bodies. Memory-only.
-	sessionMu sync.RWMutex
-	session   *tunnel.Session
 
 	// FullSync delta tracking (Phase 1 refine).
 	regMu       sync.Mutex
@@ -128,37 +122,12 @@ func New(base *tunnel.Base) *Broker {
 	return b
 }
 
-// setSession stores the session issued by RV (memory-only).
-func (b *Broker) setSession(s *tunnel.Session) {
-	b.sessionMu.Lock()
-	b.session = s
-	b.sessionMu.Unlock()
-}
-
-// currentSession returns the active session or nil.
-func (b *Broker) currentSession() *tunnel.Session {
-	b.sessionMu.RLock()
-	defer b.sessionMu.RUnlock()
-	if b.session == nil || b.session.IsExpired(time.Now()) {
-		return nil
-	}
-	return b.session
-}
-
 // Close releases resources owned by the broker. Currently stops the
 // pipeline job store's background GC loop.
 func (b *Broker) Close() {
 	if b.pipelineJobs != nil {
 		b.pipelineJobs.Close()
 	}
-}
-
-// noCacheHandler wraps an http.Handler to set no-cache headers.
-func noCacheHandler(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		h.ServeHTTP(w, r)
-	})
 }
 
 // isHashedAsset returns true for Vite build outputs with content hash in filename.

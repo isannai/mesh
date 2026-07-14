@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/glog"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/glog"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // SearchIndex caches RV /v1/nodes data and exposes typed lookups for the

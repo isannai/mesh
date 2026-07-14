@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/engine/manifest"
 	"github.com/isannai/mesh/pkg/station/queue"
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // captureEngine 는 받은 요청의 path 와 body 를 기록하는 mock 엔진이다.

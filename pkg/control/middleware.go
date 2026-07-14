@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/auth"
+	"github.com/isannai/mesh/pkg/auth"
 )
 
 // ctxKey is the type for context keys to avoid collisions.
@@ -18,22 +18,6 @@ const (
 	ctxKeyAddress ctxKey = "iann.address"
 	ctxKeyRole    ctxKey = "iann.role"
 )
-
-// AuthAddressFromContext returns the authenticated EOA address from the request context, or "".
-func AuthAddressFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(ctxKeyAddress).(string); ok {
-		return v
-	}
-	return ""
-}
-
-// AuthRoleFromContext returns the resolved role ("owner"/"admin"/"user") from the request context, or "".
-func AuthRoleFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(ctxKeyRole).(string); ok {
-		return v
-	}
-	return ""
-}
 
 // authMiddleware enforces EOA-signature based authentication on Broker routes.
 //
@@ -128,31 +112,6 @@ func (b *Broker) authMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// extractOwnedNodeID returns the node ID for paths like
-//   /node/{id}/provider/...
-//   /node/{id}/installer/...
-//   /node/{id}/terminal[/...]
-// that should be gated by per-user node ownership. Returns "" if the path
-// doesn't match (e.g. /node/{id}/svc/* which is user-level).
-func extractOwnedNodeID(path string) string {
-	if !strings.HasPrefix(path, "/node/") {
-		return ""
-	}
-	rest := strings.TrimPrefix(path, "/node/")
-	idx := strings.Index(rest, "/")
-	if idx <= 0 {
-		return ""
-	}
-	nodeID := rest[:idx]
-	sub := rest[idx+1:]
-	if strings.HasPrefix(sub, "provider/") ||
-		strings.HasPrefix(sub, "installer/") ||
-		sub == "terminal" || strings.HasPrefix(sub, "terminal/") {
-		return nodeID
-	}
-	return ""
 }
 
 // classifyAddress checks Owner/Admins/Users lists and returns the role string.

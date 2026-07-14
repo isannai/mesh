@@ -15,10 +15,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/engine/manifest"
 	"github.com/isannai/mesh/pkg/station/queue"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // initQueueSubsystem builds and starts the queue Manager + Storage from cfg.

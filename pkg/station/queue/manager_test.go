@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/setup"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 func newTestManager(t *testing.T) (*Manager, context.CancelFunc) {

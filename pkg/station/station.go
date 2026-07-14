@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,13 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/daesob/http3proxy/pkg/auth"
-	"github.com/daesob/http3proxy/pkg/engine/manifest"
-	"github.com/daesob/http3proxy/pkg/glog"
-	"github.com/daesob/http3proxy/pkg/installclient"
+	"github.com/isannai/mesh/pkg/engine/manifest"
+	"github.com/isannai/mesh/pkg/glog"
+	"github.com/isannai/mesh/pkg/installclient"
 	"github.com/isannai/mesh/pkg/station/queue"
-	"github.com/daesob/http3proxy/pkg/setup"
-	"github.com/daesob/http3proxy/pkg/tunnel"
+	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/tunnel"
 	"github.com/quic-go/quic-go"
 )
 
@@ -53,11 +51,6 @@ type Provider struct {
 	// TPM challenge response (pending, sent in next heartbeat)
 	tpmMu       sync.Mutex
 	tpmResponse []byte
-
-	// Session issued by rendezvous on successful FullSync register. Used to
-	// HMAC UDP heartbeat bodies. Never written to disk.
-	sessionMu sync.RWMutex
-	session   *tunnel.Session
 
 	// Service lifecycle state machine (keyed by service name).
 	svcStateMu sync.Mutex
@@ -160,58 +153,6 @@ func (p *Provider) NotifyJobChange() {
 	case p.heartbeatNowCh <- struct{}{}:
 	default:
 	}
-}
-
-// setSession stores the session issued by RV. Safe for concurrent callers.
-func (p *Provider) setSession(s *tunnel.Session) {
-	p.sessionMu.Lock()
-	p.session = s
-	p.sessionMu.Unlock()
-}
-
-// wakeFullSyncNow forces the next runFullSyncLoop iteration to send a
-// FullSync register immediately instead of waiting for the regular cadence
-// (24h or session expiry). Callers:
-//
-//  1. RV-driven resync ack — historically inlined where the ack arrives.
-//  2. handleTPMChallenge — the TPMResponse must reach RV via FullSync
-//     register (heartbeat protobuf has no TPM field). Without this the
-//     response sits in p.tpmResponse for up to 24h and the operator's
-//     TPM badge stays gray indefinitely.
-//
-// Safe to call concurrently — regMu serialises the flag flip and the
-// resyncCh send is non-blocking (buffer=1, drop on full).
-func (p *Provider) wakeFullSyncNow() {
-	p.regMu.Lock()
-	p.regSent = false
-	p.regMu.Unlock()
-	select {
-	case p.resyncCh <- struct{}{}:
-	default: // already pending — drop
-	}
-}
-
-// hasPendingTPMResponse reports whether a TPM challenge signature is
-// waiting to be flushed to RV. runFullSyncLoop checks this in addition
-// to currentSession() == nil so a wakeFullSyncNow() poke from
-// handleTPMChallenge actually triggers sendFullSync — without this
-// branch the loop sees a valid session and skips, the TPMResponse never
-// rides out, and TPM verification stalls for the rest of the session.
-func (p *Provider) hasPendingTPMResponse() bool {
-	p.tpmMu.Lock()
-	defer p.tpmMu.Unlock()
-	return len(p.tpmResponse) > 0
-}
-
-// currentSession returns the active session, or nil if no FullSync has
-// completed or the token has expired.
-func (p *Provider) currentSession() *tunnel.Session {
-	p.sessionMu.RLock()
-	defer p.sessionMu.RUnlock()
-	if p.session == nil || p.session.IsExpired(time.Now()) {
-		return nil
-	}
-	return p.session
 }
 
 // Run starts the provider (QUIC listener).
@@ -626,46 +567,3 @@ func (p *Provider) HandleServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleAuthVerifyHTTP is the HTTP-path counterpart of handleAuthVerify
-// (QUIC stream). Called via broker → isannd /node/p:<EOA>/provider/
-// auth-verify → peer isannd → this. Returns the wallet's role on this
-// provider (owner / admin) for the broker UI's per-node auth handshake.
-func (p *Provider) HandleAuthVerifyHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "POST required"})
-		return
-	}
-	sig := strings.TrimPrefix(r.Header.Get("Authorization"), "ISANN ")
-	message := r.Header.Get("X-ISANN-Message")
-	if sig == "" || message == "" {
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing auth headers"})
-		return
-	}
-	address, err := auth.RecoverAddress(message, sig)
-	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid signature"})
-		return
-	}
-	role := ""
-	if p.Auth.Owner != "" && strings.EqualFold(address, p.Auth.Owner) {
-		role = "owner"
-	} else {
-		for _, a := range p.Auth.Admins {
-			if strings.EqualFold(address, a) {
-				role = "admin"
-				break
-			}
-		}
-	}
-	if role == "" {
-		w.WriteHeader(http.StatusForbidden)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "not authorized"})
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{"ok": "true", "role": role, "address": address})
-}
