@@ -77,17 +77,6 @@ func (r *Registry) Get(nodeType string) Entity {
 	return r.entities[nodeType]
 }
 
-// Types returns all registered entity type names (sorted is not guaranteed).
-func (r *Registry) Types() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.entities))
-	for t := range r.entities {
-		out = append(out, t)
-	}
-	return out
-}
-
 // Describe returns input/output schemas for every registered entity.
 // Used by /v1/pipeline/entities for frontend discovery.
 func (r *Registry) Describe() map[string]EntityDescriptor {

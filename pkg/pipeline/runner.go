@@ -36,10 +36,6 @@ func NewRunner(reg *Registry, baseURL string, log *glog.Logger) *Runner {
 	}
 }
 
-// SetNodeCaller wires the broker's direct in-process node call path so AI
-// entities can reach provider services without an HTTP loopback.
-func (r *Runner) SetNodeCaller(nc NodeCaller) { r.nodeCaller = nc }
-
 // ProgressCallback is invoked after each step completes. stepID is the
 // node that just finished; partial is the live stepResults map. Callers
 // must not modify partial (it is the runner's internal state).

@@ -67,9 +67,6 @@ func (j *Job) Snapshot() JobSnapshot {
 	}
 }
 
-// Done returns a channel closed when the job finishes (done/failed/cancelled).
-func (j *Job) Done() <-chan struct{} { return j.doneCh }
-
 // JobStoreConfig tunes retention. Zero values use sensible defaults.
 type JobStoreConfig struct {
 	MaxDone int           // LRU cap for completed jobs (default 100)
@@ -214,13 +211,6 @@ func (s *JobStore) Submit(ctx context.Context, g *Graph, runner *Runner) *Job {
 	return job
 }
 
-// Get returns a pointer to the job (callers must not mutate) or nil.
-func (s *JobStore) Get(id string) *Job {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.jobs[id]
-}
-
 // Snapshot returns a JSON-friendly view of the job's current state.
 func (s *JobStore) Snapshot(id string) (JobSnapshot, bool) {
 	s.mu.Lock()
@@ -230,22 +220,6 @@ func (s *JobStore) Snapshot(id string) (JobSnapshot, bool) {
 		return JobSnapshot{}, false
 	}
 	return j.Snapshot(), true
-}
-
-// Wait blocks until the job finishes or ctx is cancelled.
-func (s *JobStore) Wait(ctx context.Context, id string) (*Job, error) {
-	s.mu.Lock()
-	job := s.jobs[id]
-	s.mu.Unlock()
-	if job == nil {
-		return nil, ErrJobNotFound
-	}
-	select {
-	case <-job.doneCh:
-		return job, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }
 
 // Cancel aborts a running job. Returns true when the job existed and was
@@ -347,11 +321,3 @@ func generateID() string {
 	return hex.EncodeToString(b)
 }
 
-// ErrJobNotFound signals a missing job id.
-type pipelineError string
-
-func (e pipelineError) Error() string { return string(e) }
-
-const (
-	ErrJobNotFound pipelineError = "pipeline: job not found"
-)

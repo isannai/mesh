@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -59,25 +58,4 @@ func RecoverAddress(message, signatureHex string) (string, error) {
 		return "", fmt.Errorf("failed to recover public key: %w", err)
 	}
 	return crypto.PubkeyToAddress(*pubKey).Hex(), nil
-}
-
-func VerifySignature(message, signatureHex, expectedAddress string) (bool, error) {
-	sigHex := strings.TrimPrefix(signatureHex, "0x")
-	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil {
-		return false, fmt.Errorf("invalid signature hex: %w", err)
-	}
-	if len(sigBytes) != 65 {
-		return false, fmt.Errorf("signature must be 65 bytes, got %d", len(sigBytes))
-	}
-	if sigBytes[64] >= 27 {
-		sigBytes[64] -= 27
-	}
-	prefix := fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(message))
-	hash := crypto.Keccak256([]byte(prefix + message))
-	pubKey, err := crypto.SigToPub(hash, sigBytes)
-	if err != nil {
-		return false, fmt.Errorf("failed to recover public key: %w", err)
-	}
-	return crypto.PubkeyToAddress(*pubKey) == common.HexToAddress(expectedAddress), nil
 }
