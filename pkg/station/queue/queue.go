@@ -325,8 +325,20 @@ func (q *Queue) Worker(ctx context.Context, process ProcessFunc) {
 		default:
 		}
 
+		// Acquire a worker slot BEFORE dequeuing. dequeue() moves a job into
+		// q.running, so pulling one while all slots are busy would count a job
+		// that is merely waiting for a slot as "running" — inflating
+		// running_count above Concurrency (e.g. 2 with Concurrency=1, most
+		// visibly when the in-flight job is stuck on an offline engine).
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+
 		job := q.dequeue()
 		if job == nil {
+			<-sem // release the slot we grabbed; nothing to run
 			// nothing to do — back off briefly
 			select {
 			case <-ctx.Done():
@@ -334,12 +346,6 @@ func (q *Queue) Worker(ctx context.Context, process ProcessFunc) {
 			case <-time.After(100 * time.Millisecond):
 			}
 			continue
-		}
-
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			return
 		}
 
 		go func(j *Job) {
