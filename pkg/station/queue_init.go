@@ -83,6 +83,16 @@ func initQueueSubsystem(ctx context.Context, cfg tunnel.Config, packagesDir stri
 			opts.StreamPath = m.API.Run.Result.StreamPath
 		}
 
+		// Default engine-call timeout so a stalled engine can't wedge the worker
+		// (docs/bugs/2026-07-30-queue-worker-wedge-on-stream-stall.md). Text
+		// (llm/vllm) turns are idle-bounded at 60s of no new chunk; image gen
+		// (sd) is a slow total-bounded call at 600s. Overridable per request
+		// via ?timeout=.
+		opts.Timeout = 60 * time.Second
+		if m != nil && m.API.Run != nil && m.API.Run.Result.Modality == "image" {
+			opts.Timeout = 600 * time.Second
+		}
+
 		// External engines (vLLM, future Ollama/TGI) get the metrics-driven
 		// backpressure wrapper. Managed engines (sd.cpp, llama.cpp via
 		// engine-runner) use the simpler forward.

@@ -81,6 +81,11 @@ type Job struct {
 	Stream    bool   `json:"-"` // true = stream-chunk mode (processor accumulates sentence chunks)
 	ChunkMode string `json:"-"` // segmenter mode: strict | sentence | low_latency (empty = default)
 
+	// Timeout overrides the service default engine-call timeout for this job
+	// (from the submit request's ?timeout=). Zero = use the service default.
+	// Streaming jobs treat it as idle (no-chunk) time; buffered as total time.
+	Timeout time.Duration `json:"-"`
+
 	chunkMu sync.Mutex `json:"-"`
 	chunks  []string   `json:"-"` // completed sentence chunks, in order
 	meta    []byte     `json:"-"` // message-excluded metadata JSON (usage/finish_reason/…), set at stream completion

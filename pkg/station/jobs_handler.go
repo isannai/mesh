@@ -288,6 +288,13 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		// docs/TODO/isann-cli-phase3.md) — the broker-direct CLI path has no
 		// broker to vouch via X-Caller-Address, so the door recovers itself.
 		job.SubmitterAddress = recoverCaller(r)
+		// ?timeout=<sec> also bounds the engine call itself (not just this
+		// handler's wait): on expiry the worker cancels the engine connection
+		// so a stalled call can't wedge the queue. Absent → service default
+		// (docs/bugs/2026-07-30-queue-worker-wedge-on-stream-stall.md).
+		if secs := clampTimeoutSecs(r.URL.Query().Get("timeout")); secs > 0 {
+			job.Timeout = time.Duration(secs) * time.Second
+		}
 	}
 	if err == queue.ErrQueueFull {
 		stats := q.Stats()
