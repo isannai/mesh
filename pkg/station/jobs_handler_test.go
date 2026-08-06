@@ -140,7 +140,7 @@ func TestJobsHandlerStreamChunks(t *testing.T) {
 	}
 	json.NewDecoder(r.Body).Decode(&c)
 	r.Body.Close()
-	if c.Content != "Hello world." || c.EOF {
+	if c.Content != "Hello world. " || c.EOF { // trailing delimiter retained
 		t.Fatalf("chunk0 = %+v", c)
 	}
 

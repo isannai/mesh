@@ -122,8 +122,8 @@ func TestManagedProcessStreaming(t *testing.T) {
 	if !strings.Contains(bs, `"total_tokens":42`) || !strings.Contains(bs, `"finish_reason":"stop"`) {
 		t.Errorf("result metadata missing: %s", bs)
 	}
-	// Sentence chunks.
-	want := []string{"Hello world.", "Bye!"}
+	// Sentence chunks — delimiters retained so join == raw content.
+	want := []string{"Hello world. ", "Bye!"}
 	if job.ChunkCount() != len(want) {
 		t.Fatalf("chunk_count = %d, want %d", job.ChunkCount(), len(want))
 	}

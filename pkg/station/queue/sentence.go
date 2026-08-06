@@ -11,9 +11,15 @@ package queue
 // is always a hard boundary regardless of punctuation. If no boundary is found
 // and the buffer exceeds maxLen, a chunk is force-flushed (guards against
 // punctuation-free output like code/lists growing unbounded).
+//
+// Faithful reconstruction: every emitted chunk retains its trailing delimiter
+// run (the terminator and the whitespace/newlines that follow it) — each rune
+// is emitted in exactly one chunk, so concatenating all chunks reproduces the
+// engine's original text verbatim. This is required for free-form output where
+// newlines are load-bearing (markdown tables, code blocks, lists). A consumer
+// that wants clean sentence text (e.g. TTS) trims each chunk on its side.
 
 import (
-	"strings"
 	"unicode"
 )
 
@@ -101,29 +107,32 @@ func (s *Segmenter) Feed(token string) []string {
 	return out
 }
 
-// Flush returns the remaining (final, possibly unterminated) sentence and
-// clears the buffer. Call once at end of stream.
+// Flush returns the remaining (final, possibly unterminated) buffer verbatim
+// and clears it. Call once at end of stream. Not trimmed — a trailing newline
+// or spaces are part of the original text and must survive reconstruction.
 func (s *Segmenter) Flush() string {
-	out := strings.TrimSpace(string(s.buf))
+	out := string(s.buf)
 	s.buf = nil
 	return out
 }
 
 // nextBoundary scans the buffer for the earliest confirmed boundary. Returns
-// the chunk text (trimmed) and the number of leading runes to consume (chunk +
-// trailing delimiter/whitespace). consumed==0 means "no boundary yet — wait".
+// the chunk text (verbatim, delimiter retained) and the number of leading runes
+// to consume. emit == consume, so no rune is dropped or duplicated. consumed==0
+// means "no boundary yet — wait".
 func (s *Segmenter) nextBoundary() (string, int) {
 	n := len(s.buf)
 	for i := 0; i < n; i++ {
 		r := s.buf[i]
 
-		// Newline = hard boundary regardless of punctuation.
+		// Newline = hard boundary regardless of punctuation. The newline run is
+		// kept in this chunk (emit == consume) so it survives reconstruction.
 		if r == '\n' || r == '\r' {
 			j := i
 			for j < n && (s.buf[j] == '\n' || s.buf[j] == '\r') {
 				j++
 			}
-			return strings.TrimSpace(string(s.buf[:i])), j
+			return string(s.buf[:j]), j
 		}
 
 		if s.term[r] {
@@ -138,12 +147,14 @@ func (s *Segmenter) nextBoundary() (string, int) {
 				k++
 			}
 			if k < n && unicode.IsSpace(s.buf[k]) {
-				// Confirmed: consume the trailing whitespace run too.
+				// Confirmed boundary. Keep the terminator AND the trailing
+				// whitespace run in this chunk (emit == consume) so the exact
+				// separator survives reconstruction.
 				w := k
 				for w < n && unicode.IsSpace(s.buf[w]) {
 					w++
 				}
-				return strings.TrimSpace(string(s.buf[:k])), w
+				return string(s.buf[:w]), w
 			}
 			if k >= n {
 				break // terminator at end, unconfirmed — wait (or force at maxLen below)
@@ -154,7 +165,10 @@ func (s *Segmenter) nextBoundary() (string, int) {
 		}
 	}
 
-	// No boundary, but buffer too long → force-flush a chunk.
+	// No boundary, but buffer too long → force-flush a chunk. Cut at the last
+	// space before maxLen and emit exactly up to it (emit == consume); any
+	// trailing whitespace stays buffered as the next chunk's leading run, so
+	// reconstruction is preserved and no chunk exceeds maxLen.
 	if len(s.buf) >= s.maxLen {
 		cut := s.maxLen
 		for p := s.maxLen - 1; p > 0; p-- {
@@ -163,11 +177,7 @@ func (s *Segmenter) nextBoundary() (string, int) {
 				break
 			}
 		}
-		w := cut
-		for w < len(s.buf) && unicode.IsSpace(s.buf[w]) {
-			w++
-		}
-		return strings.TrimSpace(string(s.buf[:cut])), w
+		return string(s.buf[:cut]), cut
 	}
 	return "", 0
 }

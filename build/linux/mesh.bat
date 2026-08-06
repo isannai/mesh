@@ -97,11 +97,17 @@ tar -czf "%OUT%\control-linux-amd64.tar.gz" -C "%CTL%" .
 if errorlevel 1 goto :error
 
 echo.
+echo  writing per-app bundle manifests...
+call :bundle station "iSANN Station"
+call :bundle chatbot "iSANN Chatbot"
+call :bundle control "iSANN Control"
+
+echo.
 echo ===========================================================================
 echo  mesh build complete   v%VER%   at   %OUT%\
-echo    station-linux-amd64.tar.gz  (mesh + bin + conf)
-echo    chatbot-linux-amd64.tar.gz  (mesh + bin + conf + docs + public)
-echo    control-linux-amd64.tar.gz  (mesh + bin + conf + web)
+echo    station-linux-amd64.tar.gz  (mesh + bin + conf)      + bundle-station.json
+echo    chatbot-linux-amd64.tar.gz  (mesh + bin + conf + docs + public) + bundle-chatbot.json
+echo    control-linux-amd64.tar.gz  (mesh + bin + conf + web)  + bundle-control.json
 echo ===========================================================================
 goto :end
 
@@ -109,6 +115,31 @@ goto :end
 echo.
 echo *** BUILD FAILED ***
 exit /b 1
+
+REM ---------------------------------------------------------------------------
+REM  :bundle <app> <summary>  — writes bundle-<app>.json next to the archives.
+REM  Per-app manifest for `isann app pull`; the {os}-{arch}.{ar} template makes
+REM  one file valid for both platforms (windows zip + linux tar.gz).
+REM ---------------------------------------------------------------------------
+:bundle
+set "APP=%~1"
+set "SUM=%~2"
+> "%OUT%\bundle-%APP%.json" (
+  echo {
+  echo   "type": "mesh",
+  echo   "version": "%VER%",
+  echo   "summary": "%SUM%",
+  echo   "platforms": [
+  echo     { "os": "windows", "arch": "amd64", "ar": "zip" },
+  echo     { "os": "linux", "arch": "amd64", "ar": "tar.gz" }
+  echo   ],
+  echo   "files": [
+  echo     { "path": "%APP%-{os}-{arch}.{ar}" }
+  echo   ],
+  echo   "metadata": { "author": "isann", "name": "%APP%" }
+  echo }
+)
+exit /b 0
 
 :end
 endlocal

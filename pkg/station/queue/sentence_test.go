@@ -39,16 +39,18 @@ func TestSegmenterSentence(t *testing.T) {
 		want   []string
 	}{
 		{
+			// Delimiters (terminator + trailing space) are retained so chunks
+			// reconstruct the original verbatim.
 			name:   "basic sentences (one token)",
 			mode:   ChunkModeSentence,
 			tokens: []string{"Hello world. How are you? Fine!"},
-			want:   []string{"Hello world.", "How are you?", "Fine!"},
+			want:   []string{"Hello world. ", "How are you? ", "Fine!"},
 		},
 		{
 			name:   "token by token (deltas)",
 			mode:   ChunkModeSentence,
 			tokens: []string{"Hello", " world.", " How", " are you?", " Fine!"},
-			want:   []string{"Hello world.", "How are you?", "Fine!"},
+			want:   []string{"Hello world. ", "How are you? ", "Fine!"},
 		},
 		{
 			name:   "decimal not split",
@@ -60,31 +62,32 @@ func TestSegmenterSentence(t *testing.T) {
 			name:   "consecutive terminators collapse",
 			mode:   ChunkModeSentence,
 			tokens: []string{"Really?! Yes... ok"},
-			want:   []string{"Really?!", "Yes...", "ok"},
+			want:   []string{"Really?! ", "Yes... ", "ok"},
 		},
 		{
+			// Newlines are retained — load-bearing for tables/code/lists.
 			name:   "newline is a hard boundary",
 			mode:   ChunkModeSentence,
 			tokens: []string{"line one\nline two\n\nlast"},
-			want:   []string{"line one", "line two", "last"},
+			want:   []string{"line one\n", "line two\n\n", "last"},
 		},
 		{
 			name:   "CJK fullwidth terminators",
 			mode:   ChunkModeSentence,
 			tokens: []string{"안녕하세요。 반갑습니다！ 잘가요？ 끝"},
-			want:   []string{"안녕하세요。", "반갑습니다！", "잘가요？", "끝"},
+			want:   []string{"안녕하세요。 ", "반갑습니다！ ", "잘가요？ ", "끝"},
 		},
 		{
 			name:   "closing quote trails terminator",
 			mode:   ChunkModeSentence,
 			tokens: []string{`He said "stop." Then go.`},
-			want:   []string{`He said "stop."`, "Then go."},
+			want:   []string{`He said "stop." `, "Then go."},
 		},
 		{
-			name:   "trims surrounding whitespace, no empty chunks",
+			name:   "surrounding whitespace retained (faithful)",
 			mode:   ChunkModeSentence,
 			tokens: []string{"  Hello.   World.  "},
-			want:   []string{"Hello.", "World."},
+			want:   []string{"  Hello.   ", "World.  "},
 		},
 	}
 	for _, tc := range cases {
@@ -99,21 +102,21 @@ func TestSegmenterSentence(t *testing.T) {
 
 func TestSegmenterModes(t *testing.T) {
 	// Semicolon: boundary in sentence/low_latency, not in strict.
-	if got := segAll(ChunkModeStrict, 0, "a; b. c"); !eq(got, []string{"a; b.", "c"}) {
+	if got := segAll(ChunkModeStrict, 0, "a; b. c"); !eq(got, []string{"a; b. ", "c"}) {
 		t.Errorf("strict semicolon: got %q", got)
 	}
-	if got := segAll(ChunkModeSentence, 0, "a; b. c"); !eq(got, []string{"a;", "b.", "c"}) {
+	if got := segAll(ChunkModeSentence, 0, "a; b. c"); !eq(got, []string{"a; ", "b. ", "c"}) {
 		t.Errorf("sentence semicolon: got %q", got)
 	}
 	// Comma: boundary only in low_latency.
-	if got := segAll(ChunkModeSentence, 0, "Hello, world. Bye"); !eq(got, []string{"Hello, world.", "Bye"}) {
+	if got := segAll(ChunkModeSentence, 0, "Hello, world. Bye"); !eq(got, []string{"Hello, world. ", "Bye"}) {
 		t.Errorf("sentence comma: got %q", got)
 	}
-	if got := segAll(ChunkModeLowLatency, 0, "Hello, world. Bye"); !eq(got, []string{"Hello,", "world.", "Bye"}) {
+	if got := segAll(ChunkModeLowLatency, 0, "Hello, world. Bye"); !eq(got, []string{"Hello, ", "world. ", "Bye"}) {
 		t.Errorf("low_latency comma: got %q", got)
 	}
 	// Unknown mode falls back to default (sentence).
-	if got := segAll("bogus", 0, "a; b. c"); !eq(got, []string{"a;", "b.", "c"}) {
+	if got := segAll("bogus", 0, "a; b. c"); !eq(got, []string{"a; ", "b. ", "c"}) {
 		t.Errorf("default mode: got %q", got)
 	}
 }
