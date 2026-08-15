@@ -93,10 +93,29 @@ powershell -NoProfile -Command "Compress-Archive -Path '%CTL%\*' -DestinationPat
 if errorlevel 1 goto :error
 
 echo.
+echo === probe (mesh, zip) ===
+REM The faucet prober. No isannd.servers - it only dials out, so unlike
+REM station/control it opens no public listener.
+set "PRB=%OUT%\probe"
+mkdir "%PRB%\bin"
+mkdir "%PRB%\conf"
+go build -ldflags "%LDFLAGS%" -o "%PRB%\bin\probe.exe" ./cmd/probe/
+if errorlevel 1 goto :error
+copy /Y "apps\probe\conf\probe.json" "%PRB%\conf\" >nul
+if errorlevel 1 goto :error
+copy /Y "apps\probe\mesh.json" "%PRB%\" >nul
+if errorlevel 1 goto :error
+copy /Y "apps\probe\README.md" "%PRB%\" >nul
+if errorlevel 1 goto :error
+powershell -NoProfile -Command "Compress-Archive -Path '%PRB%\*' -DestinationPath '%OUT%\probe-windows-amd64.zip' -Force"
+if errorlevel 1 goto :error
+
+echo.
 echo  writing per-app bundle manifests...
 call :bundle station "iSANN Station"
 call :bundle chatbot "iSANN Chatbot"
 call :bundle control "iSANN Control"
+call :bundle probe "iSANN Faucet Prober"
 
 echo.
 echo ===========================================================================
@@ -104,6 +123,7 @@ echo  mesh build complete   v%VER%   at   %OUT%\
 echo    station-windows-amd64.zip  (mesh + bin + conf)      + bundle-station.json
 echo    chatbot-windows-amd64.zip  (mesh + bin + conf + docs + public) + bundle-chatbot.json
 echo    control-windows-amd64.zip  (mesh + bin + conf + web)  + bundle-control.json
+echo    probe-windows-amd64.zip    (mesh + bin + conf)      + bundle-probe.json
 echo ===========================================================================
 goto :end
 

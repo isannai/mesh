@@ -1,0 +1,430 @@
+package probe
+
+// store.go — the prober's own record of what it fired and what came back.
+//
+// SQLite rather than JSON because a row is appended every time a shot is fired
+// or answered, and rewriting a whole file for each would get worse as history
+// grows. The driver is pure Go (modernc.org/sqlite) and already a direct
+// dependency — the gate uses it — so this adds nothing to the build.
+//
+// WHAT IS DELIBERATELY NOT HERE: counters. "shots fired", "answers received"
+// and "passes" are all derived by counting rows. A stored counter and the rows
+// it summarises drift apart eventually, and when they disagree there is no way
+// to tell which one is lying.
+//
+// The `verdict` column is always NULL for now — scoring is the next milestone.
+// It exists so that landing scoring is an UPDATE rather than a schema migration
+// over rows that are already in the field.
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+// Outcome classifies how a shot ended. Kept as distinct values rather than a
+// bool because "the node refused", "the queue was full" and "it never answered"
+// are three different statements about a node, and collapsing them would make
+// the history unable to answer why a node looks bad.
+const (
+	OutcomeSubmitted = "submitted"  // accepted, result not fetched yet
+	OutcomeAnswered  = "answered"   // result retrieved
+	OutcomeQueueFull = "queue_full" // 429 — the node is working, just busy
+	OutcomeRefused   = "refused"    // rejected or unreachable
+	OutcomeTimeout   = "timeout"    // accepted but never finished in time
+)
+
+// Store is the prober's SQLite database.
+type Store struct{ db *sql.DB }
+
+// OpenStore opens (creating if needed) the database at path.
+//
+// WAL so a separate reader — a status command, an operator with sqlite3 — can
+// look at history while the prober is writing. busy_timeout so those readers
+// make the writer wait rather than fail.
+func OpenStore(path string) (*Store, error) {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("probe db dir: %w", err)
+		}
+	}
+	db, err := sql.Open("sqlite", path+"?_journal=WAL&_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open probe db: %w", err)
+	}
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) Close() error { return s.db.Close() }
+
+// schema is applied on every open. Every statement is CREATE ... IF NOT EXISTS,
+// so opening an existing database is a no-op.
+const schema = `
+CREATE TABLE IF NOT EXISTS question (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  category     TEXT    NOT NULL,
+  q            TEXT    NOT NULL,
+  draft_answer TEXT    NOT NULL,
+  fewshot      TEXT    NOT NULL,   -- JSON [{q,a},{q,a}]
+  created_at   INTEGER NOT NULL,
+  consumed_at  INTEGER              -- NULL while still in the queue
+);
+
+CREATE TABLE IF NOT EXISTS shot (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  fired_at          INTEGER NOT NULL,
+  node_id           TEXT    NOT NULL,
+  node_addr         TEXT    NOT NULL,
+  slash24           TEXT    NOT NULL,
+  engine            TEXT,
+  service           TEXT,
+  model             TEXT,
+  model_hash        TEXT,
+  job_id            TEXT,
+  question_id       INTEGER,
+  submit_status     INTEGER,
+  fetched_at        INTEGER,
+  latency_ms        INTEGER,
+  prompt_tokens     INTEGER,
+  completion_tokens INTEGER,
+  answer_raw        TEXT,
+  outcome           TEXT    NOT NULL,
+  verdict           TEXT,
+  appointment       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS observation (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  seen_at   INTEGER NOT NULL,
+  node_id   TEXT    NOT NULL,
+  auth_mode TEXT,
+  online    INTEGER,
+  max_queue INTEGER,
+  version   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS shot_node_day ON shot(node_id, fired_at);
+CREATE INDEX IF NOT EXISTS shot_open     ON shot(outcome, fired_at);
+CREATE INDEX IF NOT EXISTS obs_node      ON observation(node_id, seen_at);
+CREATE INDEX IF NOT EXISTS q_unconsumed  ON question(consumed_at, category);
+`
+
+func (s *Store) migrate() error {
+	if _, err := s.db.Exec(schema); err != nil {
+		return fmt.Errorf("probe db schema: %w", err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// questions
+// ---------------------------------------------------------------------------
+
+// AddQuestions appends a generated batch to the queue.
+func (s *Store) AddQuestions(qs []Question, now time.Time) error {
+	if len(qs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT INTO question(category,q,draft_answer,fewshot,created_at) VALUES(?,?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, q := range qs {
+		if _, err := stmt.Exec(string(q.Category), q.Q, q.Draft, encodeFewshot(q.Fewshot), now.UnixMilli()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TakeQuestion removes one unconsumed question of the given category from the
+// queue and returns it. ok=false when that category is empty.
+//
+// Marking it consumed in the same transaction as reading it is the whole point:
+// a question must never be asked twice, because a repeat is a question whose
+// answer may already be known to the node being asked.
+func (s *Store) TakeQuestion(cat Category, now time.Time) (Question, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Question{}, false, err
+	}
+	defer tx.Rollback()
+
+	var (
+		q       Question
+		fewshot string
+	)
+	row := tx.QueryRow(
+		`SELECT id,category,q,draft_answer,fewshot FROM question
+		  WHERE consumed_at IS NULL AND category = ? ORDER BY id LIMIT 1`, string(cat))
+	var catStr string
+	if err := row.Scan(&q.ID, &catStr, &q.Q, &q.Draft, &fewshot); err != nil {
+		if err == sql.ErrNoRows {
+			return Question{}, false, nil
+		}
+		return Question{}, false, err
+	}
+	q.Category = Category(catStr)
+	q.Fewshot = decodeFewshot(fewshot)
+
+	if _, err := tx.Exec(`UPDATE question SET consumed_at = ? WHERE id = ?`, now.UnixMilli(), q.ID); err != nil {
+		return Question{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Question{}, false, err
+	}
+	return q, true, nil
+}
+
+// QueueDepth counts unconsumed questions per category.
+func (s *Store) QueueDepth() (map[Category]int, error) {
+	rows, err := s.db.Query(`SELECT category, COUNT(*) FROM question WHERE consumed_at IS NULL GROUP BY category`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[Category]int{}
+	for rows.Next() {
+		var c string
+		var n int
+		if err := rows.Scan(&c, &n); err != nil {
+			return nil, err
+		}
+		out[Category(c)] = n
+	}
+	return out, rows.Err()
+}
+
+// PruneConsumed drops questions consumed before cutoff. Their text is preserved
+// on the shot row's own columns for as long as scoring needs it.
+func (s *Store) PruneConsumed(cutoff time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM question WHERE consumed_at IS NOT NULL AND consumed_at < ?`, cutoff.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ---------------------------------------------------------------------------
+// shots
+// ---------------------------------------------------------------------------
+
+// Shot is one fired probe.
+type Shot struct {
+	ID               int64
+	FiredAt          time.Time
+	NodeID           string
+	NodeAddr         string
+	Slash24          string
+	Engine           string
+	Service          string
+	Model            string
+	ModelHash        string
+	JobID            string
+	QuestionID       int64
+	SubmitStatus     int
+	FetchedAt        time.Time
+	LatencyMs        int64
+	PromptTokens     int
+	CompletionTokens int
+	AnswerRaw        string
+	Outcome          string
+	Appointment      string
+}
+
+// RecordShot writes the submit half of a shot and returns its row id.
+func (s *Store) RecordShot(sh Shot) (int64, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO shot(fired_at,node_id,node_addr,slash24,engine,service,model,model_hash,
+		                  job_id,question_id,submit_status,outcome,appointment)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sh.FiredAt.UnixMilli(), sh.NodeID, sh.NodeAddr, sh.Slash24, sh.Engine, sh.Service,
+		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.Appointment)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// CompleteShot fills in the retrieval half.
+//
+// latencyMs is the prober's own observation — from submit to result in hand. It
+// is NOT the node's generation time, and the two must not be conflated: fetching
+// late inflates it by however long the prober waited before asking. Kept anyway
+// because it bounds the real value from above, and labelled as observed so a
+// later reader does not mistake it for something the node reported.
+func (s *Store) CompleteShot(id int64, fetchedAt time.Time, latencyMs int64,
+	promptTokens, completionTokens int, answer, outcome string) error {
+	_, err := s.db.Exec(
+		`UPDATE shot SET fetched_at=?, latency_ms=?, prompt_tokens=?, completion_tokens=?,
+		                 answer_raw=?, outcome=? WHERE id=?`,
+		fetchedAt.UnixMilli(), latencyMs, promptTokens, completionTokens, answer, outcome, id)
+	return err
+}
+
+// FailShot marks a shot that never produced a result.
+func (s *Store) FailShot(id int64, at time.Time, outcome string) error {
+	_, err := s.db.Exec(`UPDATE shot SET fetched_at=?, outcome=? WHERE id=?`, at.UnixMilli(), outcome, id)
+	return err
+}
+
+// ShotsToday counts shots fired at a node since the start of the current day.
+//
+// This enforces the per-node daily cap, so it deliberately counts EVERY shot
+// including refusals and timeouts. Counting only successes would let an
+// unreachable node be hammered without limit — the cap is there to bound what
+// the prober costs a node, not to measure whether the node is good.
+func (s *Store) ShotsToday(nodeID string, dayStart time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM shot WHERE node_id=? AND fired_at>=?`,
+		nodeID, dayStart.UnixMilli()).Scan(&n)
+	return n, err
+}
+
+// ShotCountsToday returns shots-so-far per node, for the whole day at once.
+// One query instead of one per candidate — the selection pass runs every minute
+// over the full directory.
+func (s *Store) ShotCountsToday(dayStart time.Time) (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT node_id, COUNT(*) FROM shot WHERE fired_at>=? GROUP BY node_id`,
+		dayStart.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// PendingShots lists shots that were accepted but whose result was never
+// retrieved — the prober's own restart leaves these behind.
+func (s *Store) PendingShots() ([]Shot, error) {
+	rows, err := s.db.Query(
+		`SELECT id,fired_at,node_id,node_addr,job_id,service,model FROM shot
+		  WHERE outcome=? AND job_id<>'' ORDER BY fired_at`, OutcomeSubmitted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Shot
+	for rows.Next() {
+		var sh Shot
+		var firedMs int64
+		if err := rows.Scan(&sh.ID, &firedMs, &sh.NodeID, &sh.NodeAddr, &sh.JobID, &sh.Service, &sh.Model); err != nil {
+			return nil, err
+		}
+		sh.FiredAt = time.UnixMilli(firedMs)
+		out = append(out, sh)
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// observations
+// ---------------------------------------------------------------------------
+
+// Observation is one directory sighting of a node.
+type Observation struct {
+	NodeID   string
+	AuthMode string
+	Online   bool
+	MaxQueue int
+	Version  string
+}
+
+// RecordObservations appends a directory snapshot.
+//
+// Every node seen is recorded, INCLUDING ones never fired at. The rule this
+// feeds — "was it public all day" — cannot be answered from shot rows alone,
+// because a node that was protected all morning has no shots to show for it.
+func (s *Store) RecordObservations(obs []Observation, at time.Time) error {
+	if len(obs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT INTO observation(seen_at,node_id,auth_mode,online,max_queue,version) VALUES(?,?,?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, o := range obs {
+		online := 0
+		if o.Online {
+			online = 1
+		}
+		if _, err := stmt.Exec(at.UnixMilli(), o.NodeID, o.AuthMode, online, o.MaxQueue, o.Version); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// PruneObservations drops sightings older than cutoff.
+func (s *Store) PruneObservations(cutoff time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM observation WHERE seen_at < ?`, cutoff.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// NodeSighting is one row of observation history, for continuity accounting.
+type NodeSighting struct {
+	NodeID string
+	SeenAt time.Time
+}
+
+// SightingsToday returns every observation since dayStart, ordered by node then
+// time so a caller can walk each node's run in one pass.
+//
+// The whole day is loaded rather than queried per node: with a few thousand
+// nodes this is one scan an hour instead of a few thousand point lookups, and
+// the continuity walk needs the sequence anyway.
+func (s *Store) SightingsToday(dayStart time.Time) ([]NodeSighting, error) {
+	rows, err := s.db.Query(
+		`SELECT node_id, seen_at FROM observation WHERE seen_at >= ? ORDER BY node_id, seen_at`,
+		dayStart.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []NodeSighting
+	for rows.Next() {
+		var id string
+		var ms int64
+		if err := rows.Scan(&id, &ms); err != nil {
+			return nil, err
+		}
+		out = append(out, NodeSighting{NodeID: id, SeenAt: time.UnixMilli(ms)})
+	}
+	return out, rows.Err()
+}

@@ -1,0 +1,59 @@
+{
+  "spec_version": "1",
+  "name": "probe",
+  "version": "0.1.0",
+  "author": "isann",
+  "description": "faucet prober - asks public nodes a question and records the answer",
+  "bin": "bin/probe",
+  "args": [
+    "-config",
+    "conf/probe.json"
+  ],
+  "config": {
+    "path": "conf/probe.json",
+    "env": [
+      {
+        "key": "PROBE_SIGNER_PASSPHRASE",
+        "required": false,
+        "secret": true,
+        "desc": "passphrase for the ticket-signing key; the key itself is found by the appointment's bound address in artifacts/keystores/"
+      },
+      {
+        "key": "PROBE_KEYSTORES_DIR",
+        "required": false,
+        "secret": false,
+        "desc": "override the keystore search directory (default: the install root's artifacts/keystores)"
+      },
+      {
+        "key": "PROBE_QUESTION_GENERATOR_SERVICE",
+        "required": false,
+        "secret": false,
+        "desc": "THIS node's text service, used to write questions in batches (empty = arithmetic only)"
+      },
+      {
+        "key": "PROBE_QUESTION_FANOUT",
+        "required": false,
+        "secret": false,
+        "desc": "how many nodes (in different /24s) get the same question per round (default 5)"
+      },
+      {
+        "key": "PROBE_FIRE_INTERVAL_SEC",
+        "required": false,
+        "secret": false,
+        "desc": "seconds between firing rounds (default 60)"
+      },
+      {
+        "key": "PROBE_RESPONSE_DEADLINE_SEC",
+        "required": false,
+        "secret": false,
+        "desc": "base answer deadline; scaled up for larger declared models (default 30)"
+      },
+      {
+        "key": "PROBE_REFRESH_SEC",
+        "required": false,
+        "secret": false,
+        "desc": "seconds between node-directory refreshes (default 3600)"
+      }
+    ]
+  }
+}
