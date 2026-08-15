@@ -12,6 +12,7 @@ require (
 	github.com/quic-go/quic-go v0.48.2
 	golang.org/x/crypto v0.48.0
 	golang.org/x/sys v0.43.0
+	golang.org/x/text v0.34.0
 	modernc.org/sqlite v1.47.0
 )
 

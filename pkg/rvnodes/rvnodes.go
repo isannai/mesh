@@ -75,6 +75,17 @@ type Service struct {
 	Engine        string `json:"engine,omitempty"`
 	Model         string `json:"model,omitempty"`
 	ModelHash     string `json:"model_hash,omitempty"`
+	// ModelArch is the architecture family the node itself declares —
+	// "sd15" / "sdxl" / "sd3" / "pony" / "flux", from the package.json that
+	// `isann model pull --arch` wrote. Empty for text engines, which have no
+	// arch hierarchy, and empty from any node older than the isannd release
+	// that started stamping it, so a caller still needs a fallback.
+	//
+	// It decides the resolution an image probe may ask for, and that is not a
+	// preference: SDXL at 512x512 returns duplicated subjects and broken
+	// anatomy, SD 1.5 at 1024x1024 the same in reverse. Guessing it wrong
+	// fails an honest node for the caller's mistake.
+	ModelArch     string `json:"model_arch,omitempty"`
 	ServerReady   bool   `json:"server_ready,omitempty"`
 	ServerLoading bool   `json:"server_loading,omitempty"`
 	MaxQueue      int    `json:"max_queue,omitempty"`
@@ -104,8 +115,50 @@ func (n Node) IsPublic() bool {
 // textEngines are the engine names that serve text completion.
 var textEngines = map[string]bool{"llama": true, "vllm": true, "llm": true}
 
-// TextService returns a running text service, preferring one whose engine is
-// known. ok=false when the node serves no ready text engine.
+// textServiceNames is the fallback for nodes that advertise no engine.
+//
+// 🔴 Not a nicety — without it NOTHING is eligible. The station DOES populate
+// `engine`; the RV's /v1/nodes builder rebuilt each service from a field
+// whitelist that omitted it, so it never reached a caller. A live directory row
+// from an RV predating that fix looks like:
+//
+//	{"name":"llm-api","launcher":"docker","model":"…","server_ready":true,…}
+//
+// Judging on `Engine` alone makes every node in the network read as "serves no
+// text", and the only symptom is `N nodes, 0 eligible` — which says nothing
+// about why.
+//
+// The NAME is the sounder key anyway: it is the URL segment (`/svc/<name>/…`),
+// so it is part of the contract and it actually exists. Listed explicitly so
+// that sd-api and clip-api are not swept in by a "-api" suffix rule.
+var textServiceNames = map[string]bool{"llm-api": true, "vllm-api": true}
+
+// knownEngine reports whether an engine name is one this package can classify.
+//
+// 🔴 An engine we do not RECOGNISE is not the same as no engine, and collapsing
+// the two is how a working node disappears. While `engine` never reached a
+// caller, every service fell through to the name check; now that it does, a
+// lookup that answers false for an unlisted name — "comfyui" against the
+// "comfy" this table holds, an engine package added after this build — would
+// reject a node the name check was catching yesterday. So an unknown engine
+// defers to the name; only a KNOWN one is allowed to be the final word.
+func knownEngine(e string) bool { return textEngines[e] || imageEngines[e] }
+
+// isTextService reports whether a service serves text completion.
+//
+// A recognised engine wins — it is the more specific statement, and it is what
+// lets a node named "chat-api" be classified at all. Anything else answers by
+// name, which is the URL segment (`/svc/<name>/…`) and therefore part of the
+// contract.
+func isTextService(s Service) bool {
+	if e := strings.ToLower(strings.TrimSpace(s.Engine)); knownEngine(e) {
+		return textEngines[e]
+	}
+	return textServiceNames[strings.ToLower(strings.TrimSpace(s.Name))]
+}
+
+// TextService returns a running text service. ok=false when the node serves no
+// ready text engine.
 //
 // ServerLoading is not enough to shoot at: the container is up but the weights
 // are still being read, and a request lands in a queue that may outlive the
@@ -113,7 +166,36 @@ var textEngines = map[string]bool{"llama": true, "vllm": true, "llm": true}
 // nothing wrong.
 func (n Node) TextService() (Service, bool) {
 	for _, s := range n.Services {
-		if s.ServerReady && textEngines[strings.ToLower(s.Engine)] {
+		if s.ServerReady && isTextService(s) {
+			return s, true
+		}
+	}
+	return Service{}, false
+}
+
+// imageEngines / imageServiceNames mirror the text pair, and the name fallback
+// carries the same weight here — see knownEngine.
+var imageEngines = map[string]bool{"sd": true, "comfy": true}
+var imageServiceNames = map[string]bool{"sd-api": true}
+
+// isImageService is the image half of isTextService, with the same precedence.
+func isImageService(s Service) bool {
+	if e := strings.ToLower(strings.TrimSpace(s.Engine)); knownEngine(e) {
+		return imageEngines[e]
+	}
+	return imageServiceNames[strings.ToLower(strings.TrimSpace(s.Name))]
+}
+
+// ImageService returns a running image service. ok=false when the node serves
+// none.
+//
+// Deliberately separate from TextService rather than a parameterised lookup: a
+// node commonly runs both, and the two tracks fire different requests at
+// different cadences. Collapsing them would make "which service is this shot
+// for" ambiguous at exactly the point it must not be.
+func (n Node) ImageService() (Service, bool) {
+	for _, s := range n.Services {
+		if s.ServerReady && isImageService(s) {
 			return s, true
 		}
 	}
@@ -168,11 +250,17 @@ const fetchTimeout = 20 * time.Second
 // REST API. Everything under it is loopback-guarded and TLS-terminated by the
 // daemon.
 //
-// 🔴 This is NOT /internal/api/list/nodes. That route is operator-gated
-// (withSession), which would make a background prober depend on someone having
-// run `isann auth unlock` recently — and sessions expire, so the prober would
-// silently stop finding targets one day. The bridge takes no session at all.
-// pkg/control/search.go:151 (fetchRVPath) reaches the same directory this way.
+// 🔴 This is NOT /internal/api/list/nodes. That route is operator-gated, which
+// would make a background prober depend on someone having run
+// `isann auth unlock` recently — and sessions expire, so the prober would
+// silently stop finding targets one day.
+//
+// The bridge is not automatically session-free either: isannd wraps its whole
+// internal mux, bridge routes included, in a secure-by-default auth gate, and
+// this path had to be named as an explicit exception there (isannd's
+// internalAuthClass). Before that it answered 401 to every caller who did not
+// hold a session — including pkg/control's search index, which reaches the same
+// directory the same way. An isannd older than that fix still 401s.
 const bridgePath = "/internal/rv"
 
 // Fetch reads the RV directory through the local isannd node-bridge.

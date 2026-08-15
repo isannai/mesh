@@ -156,8 +156,11 @@ func TestSubmitUsesSchemaParams(t *testing.T) {
 	if n, _ := run["max_tokens"].(float64); int(n) != probeMaxTokens {
 		t.Errorf("max_tokens = %v, want %d", run["max_tokens"], probeMaxTokens)
 	}
+	// A floor, not a preference. Answers are made short by the stop sequence,
+	// not by this cap; going below 16 only truncates long proper nouns like
+	// "Ouagadougou" and turns honest nodes into unscorable shots.
 	if int(probeMaxTokens) < 16 {
-		t.Error("max_tokens must stay generous — the stop sequence makes answers short")
+		t.Error("max_tokens must clear the longest capital name")
 	}
 	if fake.submits[0]["service"] != "llm-api" {
 		t.Errorf("service = %v", fake.submits[0]["service"])

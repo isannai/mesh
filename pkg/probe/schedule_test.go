@@ -7,7 +7,9 @@ import (
 	"github.com/isannai/mesh/pkg/rvnodes"
 )
 
-func hrs(v ...float64) []time.Duration { return parseSchedule(v) }
+// hrs builds a ladder from HOURS, the unit the tests were written in.
+// The config now takes seconds, so convert on the way in.
+func hrs(v ...float64) []time.Duration { return parseScheduleSec(hoursToSec(v)) }
 
 // The ladder is the whole point: five scattered shots would prove "alive five
 // times", while widening gaps prove "there all day".
@@ -36,17 +38,17 @@ func TestDueShots(t *testing.T) {
 // An out-of-order list would make a later shot come due before an earlier one
 // and the counter would run backwards.
 func TestParseScheduleSortsAndDefaults(t *testing.T) {
-	got := parseSchedule([]float64{8, 1, 13, 3, 5})
+	got := parseScheduleSec(hoursToSec([]float64{8, 1, 13, 3, 5}))
 	want := []time.Duration{time.Hour, 3 * time.Hour, 5 * time.Hour, 8 * time.Hour, 13 * time.Hour}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("schedule = %v, want %v", got, want)
 		}
 	}
-	if len(parseSchedule(nil)) != len(DefaultSchedule) {
+	if len(parseScheduleSec(nil)) != len(DefaultSchedule) {
 		t.Error("an empty list should fall back to the default")
 	}
-	if len(parseSchedule([]float64{0, -1})) != len(DefaultSchedule) {
+	if len(parseScheduleSec([]float64{0, -1})) != len(DefaultSchedule) {
 		t.Error("a list of non-positive values should fall back to the default")
 	}
 }
@@ -112,7 +114,7 @@ func TestDueTargets(t *testing.T) {
 		node("fresh", "203.0.113.2:1", "public", true),
 		node("done", "203.0.113.3:1", "public", true),
 		node("unseen", "203.0.113.4:1", "public", true),
-	})
+	}, nil)
 	anchors := map[string]time.Time{
 		"up":    base,
 		"fresh": now.Add(-30 * time.Minute), // not past the first threshold
@@ -135,7 +137,7 @@ func TestGroupBySlash24(t *testing.T) {
 		node("b", "203.0.113.2:1", "public", true),
 		node("c", "198.51.100.1:1", "public", true),
 		node("d", "garbage", "public", true),
-	})
+	}, nil)
 	groups := groupBySlash24(targets)
 	if len(groups) != 3 {
 		t.Fatalf("want 3 groups (two /24s + one unparseable), got %d: %+v", len(groups), groups)

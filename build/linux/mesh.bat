@@ -50,7 +50,9 @@ mkdir "%STN%\bin"
 mkdir "%STN%\conf"
 go build -ldflags "%LDFLAGS%" -o "%STN%\bin\station" ./cmd/station/
 if errorlevel 1 goto :error
-copy /Y "apps\station\conf\station.json" "%STN%\conf\" >nul
+REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째 conf 를 추가하는 순간
+REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
+xcopy /E /I /Y /Q "apps\station\conf" "%STN%\conf" >nul
 if errorlevel 1 goto :error
 copy /Y "apps\station\mesh.json" "%STN%\" >nul
 if errorlevel 1 goto :error
@@ -87,7 +89,9 @@ if not errorlevel 1 call npm run build
 set "WEBERR=%errorlevel%"
 popd
 if not "%WEBERR%"=="0" goto :error
-copy /Y "apps\control\conf\control.json" "%CTL%\conf\" >nul
+REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째 conf 를 추가하는 순간
+REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
+xcopy /E /I /Y /Q "apps\control\conf" "%CTL%\conf" >nul
 if errorlevel 1 goto :error
 copy /Y "apps\control\mesh.json" "%CTL%\" >nul
 if errorlevel 1 goto :error
@@ -105,7 +109,9 @@ mkdir "%PRB%\bin"
 mkdir "%PRB%\conf"
 go build -ldflags "%LDFLAGS%" -o "%PRB%\bin\probe" ./cmd/probe/
 if errorlevel 1 goto :error
-copy /Y "apps\probe\conf\probe.json" "%PRB%\conf\" >nul
+REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째 conf 를 추가하는 순간
+REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
+xcopy /E /I /Y /Q "apps\probe\conf" "%PRB%\conf" >nul
 if errorlevel 1 goto :error
 copy /Y "apps\probe\mesh.json" "%PRB%\" >nul
 if errorlevel 1 goto :error
@@ -115,19 +121,12 @@ tar -czf "%OUT%\probe-linux-amd64.tar.gz" -C "%PRB%" .
 if errorlevel 1 goto :error
 
 echo.
-echo  writing per-app bundle manifests...
-call :bundle station "iSANN Station"
-call :bundle chatbot "iSANN Chatbot"
-call :bundle control "iSANN Control"
-call :bundle probe "iSANN Faucet Prober"
-
-echo.
 echo ===========================================================================
 echo  mesh build complete   v%VER%   at   %OUT%\
-echo    station-linux-amd64.tar.gz  (mesh + bin + conf)      + bundle-station.json
-echo    chatbot-linux-amd64.tar.gz  (mesh + bin + conf + docs + public) + bundle-chatbot.json
-echo    control-linux-amd64.tar.gz  (mesh + bin + conf + web)  + bundle-control.json
-echo    probe-linux-amd64.tar.gz    (mesh + bin + conf)      + bundle-probe.json
+echo    station-linux-amd64.tar.gz  (mesh + bin + conf)
+echo    chatbot-linux-amd64.tar.gz  (mesh + bin + conf + docs + public)
+echo    control-linux-amd64.tar.gz  (mesh + bin + conf + web)
+echo    probe-linux-amd64.tar.gz    (mesh + bin + conf)
 echo ===========================================================================
 goto :end
 
@@ -135,31 +134,6 @@ goto :end
 echo.
 echo *** BUILD FAILED ***
 exit /b 1
-
-REM ---------------------------------------------------------------------------
-REM  :bundle <app> <summary>  — writes bundle-<app>.json next to the archives.
-REM  Per-app manifest for `isann app pull`; the {os}-{arch}.{ar} template makes
-REM  one file valid for both platforms (windows zip + linux tar.gz).
-REM ---------------------------------------------------------------------------
-:bundle
-set "APP=%~1"
-set "SUM=%~2"
-> "%OUT%\bundle-%APP%.json" (
-  echo {
-  echo   "type": "mesh",
-  echo   "version": "%VER%",
-  echo   "summary": "%SUM%",
-  echo   "platforms": [
-  echo     { "os": "windows", "arch": "amd64", "ar": "zip" },
-  echo     { "os": "linux", "arch": "amd64", "ar": "tar.gz" }
-  echo   ],
-  echo   "files": [
-  echo     { "path": "%APP%-{os}-{arch}.{ar}" }
-  echo   ],
-  echo   "metadata": { "author": "isann", "name": "%APP%" }
-  echo }
-)
-exit /b 0
 
 :end
 endlocal

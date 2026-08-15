@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,37 @@ func node(id, addr, mode string, ready bool) rvnodes.Node {
 	}
 }
 
+// A prober must not fire at itself: it would be signing tickets for a machine
+// it controls. Its HELPERS are fair game — a writer knows the model-written
+// questions in advance, but arithmetic is generated here, fresh per shot, and
+// is half the mix.
+func TestExcludeSelfOnly(t *testing.T) {
+	ex := excluded("S:0xAAA")
+
+	nodes := []rvnodes.Node{
+		node("S:0xaaa", "203.0.113.1:1", "public", true), // self — other case, same address
+		node("0xbbb", "203.0.113.2:1", "public", true),   // question writer, no role prefix
+		node("S:0xCCC", "203.0.113.3:1", "public", true), // clip judge
+	}
+	got := eligible(nodes, ex)
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want the two helpers and not self", got)
+	}
+	for _, g := range got {
+		if strings.EqualFold(nodeAddressOf(g.Node.ID), "0xaaa") {
+			t.Error("the prober's own node was fired at")
+		}
+	}
+}
+
+// An unknown self id must not put an empty key in the set, which would match
+// every node whose id fails to parse.
+func TestExcludeUnknownSelf(t *testing.T) {
+	if ex := excluded(""); len(ex) != 0 {
+		t.Errorf("exclude = %v, want empty when the self id is unknown", ex)
+	}
+}
+
 // Firing at a protected node produces a refusal that says nothing about the
 // node, and firing at one with no ready engine has nowhere to land.
 func TestEligible(t *testing.T) {
@@ -24,7 +56,7 @@ func TestEligible(t *testing.T) {
 		node("d", "203.0.113.4:1", "", true),                 // empty = public
 		{ID: "e", Addr: "203.0.113.5:1", AuthMode: "public"}, // no services at all
 	}
-	got := eligible(nodes)
+	got := eligible(nodes, nil)
 	if len(got) != 2 {
 		t.Fatalf("want 2 eligible, got %d: %+v", len(got), got)
 	}

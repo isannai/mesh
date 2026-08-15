@@ -10,7 +10,7 @@
     "conf/probe.json"
   ],
   "config": {
-    "path": "conf/probe.json",
+    "path": "config.json",
     "env": [
       {
         "key": "PROBE_SIGNER_PASSPHRASE",
@@ -25,10 +25,28 @@
         "desc": "override the keystore search directory (default: the install root's artifacts/keystores)"
       },
       {
-        "key": "PROBE_QUESTION_GENERATOR_SERVICE",
+        "key": "PROBE_GENERATORS",
         "required": false,
         "secret": false,
-        "desc": "THIS node's text service, used to write questions in batches (empty = arithmetic only)"
+        "desc": "comma-list of nodes that write the questions, tried in turn: 'this' or a node id / favorite alias, optionally '<node>/<service>'. Use 'none' for arithmetic only (an empty value cannot mean that - it is indistinguishable from unset)"
+      },
+      {
+        "key": "PROBE_GENERATOR_SERVICE",
+        "required": false,
+        "secret": false,
+        "desc": "service name for generator entries that do not name one (default llm-api)"
+      },
+      {
+        "key": "PROBE_CLIPS",
+        "required": false,
+        "secret": false,
+        "desc": "comma-list of CLIP validators that judge image probes, same syntax as PROBE_GENERATORS. Empty or 'none' means the image track does not run at all"
+      },
+      {
+        "key": "PROBE_CLIP_SERVICE",
+        "required": false,
+        "secret": false,
+        "desc": "service name for clip entries that do not name one (default clip-api)"
       },
       {
         "key": "PROBE_QUESTION_FANOUT",
@@ -53,6 +71,24 @@
         "required": false,
         "secret": false,
         "desc": "seconds between node-directory refreshes (default 3600)"
+      },
+      {
+        "key": "PROBE_DB",
+        "required": false,
+        "secret": false,
+        "desc": "path to the shot/question database, relative to the app folder (default probe.db). applyEnvOverrides reads this; it was consumed by the code but undeclared here, so `isann mesh config` could not set it"
+      },
+      {
+        "key": "PROBE_IMAGE_DEADLINE_SEC",
+        "required": false,
+        "secret": false,
+        "desc": "how long a node gets to draw a picture. unset = derived from the node's own reported avg_job_sec (x2, floor 300s, ceiling 900s), which is almost always the right answer"
+      },
+      {
+        "key": "PROBE_FIRE_AT_SELF",
+        "required": false,
+        "secret": false,
+        "desc": "'true' to also fire at this node. off by default - a prober signing tickets for its own node is the shape a faucet must not have; useful for a single-node test bench"
       }
     ]
   }

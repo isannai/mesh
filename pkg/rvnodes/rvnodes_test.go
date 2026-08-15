@@ -114,6 +114,44 @@ func TestTextService(t *testing.T) {
 			t.Error("an image engine was returned as a text service")
 		}
 	})
+
+	// 🔴 The shape live directories actually have. `engine` is omitempty and
+	// stations do not set it, so judging on it alone made EVERY node read as
+	// "serves no text" and the prober found nothing to fire at.
+	t.Run("no engine falls back to the service name", func(t *testing.T) {
+		n := Node{Services: []Service{
+			{Name: "llm-api", ServerReady: true, Model: "qwen2.5-14b.gguf"},
+		}}
+		s, ok := n.TextService()
+		if !ok || s.Name != "llm-api" {
+			t.Fatalf("got %+v, %v", s, ok)
+		}
+	})
+
+	t.Run("vllm-api by name", func(t *testing.T) {
+		n := Node{Services: []Service{{Name: "vllm-api", ServerReady: true}}}
+		if _, ok := n.TextService(); !ok {
+			t.Error("vllm-api was not recognised by name")
+		}
+	})
+
+	// The fallback must not become "anything ending in -api".
+	t.Run("name fallback does not sweep in other services", func(t *testing.T) {
+		for _, name := range []string{"sd-api", "clip-api", "whisper-api"} {
+			n := Node{Services: []Service{{Name: name, ServerReady: true}}}
+			if _, ok := n.TextService(); ok {
+				t.Errorf("%q was treated as a text service", name)
+			}
+		}
+	})
+
+	// A declared engine is the more specific statement and wins over the name.
+	t.Run("engine wins over name", func(t *testing.T) {
+		n := Node{Services: []Service{{Name: "llm-api", Engine: "sd", ServerReady: true}}}
+		if _, ok := n.TextService(); ok {
+			t.Error("a declared non-text engine was overridden by the name")
+		}
+	})
 }
 
 func TestFetch(t *testing.T) {

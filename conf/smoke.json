@@ -1,0 +1,18 @@
+{
+  "node_bridge_addr": "http://127.0.0.1:8443",
+  "db": "probe-smoke.db",
+
+  "generators": ["S:0xbada8be86f587f96901a3c8d3492a3b0f13c7cee"],
+  "generator_service": "llm-api",
+
+  "clips": [],
+
+  "schedule_sec": [5, 10, 15],
+  "fire_interval_sec": 5,
+
+  "queue_low_water": 1,
+  "question_fanout": 2,
+  "response_deadline_sec": 60,
+
+  "signer": { "passphrase": "" }
+}

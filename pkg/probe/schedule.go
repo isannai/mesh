@@ -49,25 +49,50 @@ var DefaultSchedule = []time.Duration{
 	13 * time.Hour,
 }
 
-// parseSchedule turns configured hours into durations, falling back to the
-// default when unset. Sorted ascending because the n-th shot must require more
-// uptime than the (n-1)-th — an out-of-order list would make a later shot due
-// before an earlier one and the counter would run backwards.
-func parseSchedule(hours []float64) []time.Duration {
-	if len(hours) == 0 {
+// parseScheduleSec turns configured SECONDS into durations, falling back to the
+// default when unset.
+//
+// Seconds rather than hours because the unit has to serve two jobs. In
+// production the thresholds are hours, but testing means asking "does a shot go
+// out at all", and expressing ten seconds in hours is 0.00277 — a number nobody
+// can read and everybody mistypes. Seconds make both ends writable:
+//
+//	production   [3600, 10800, 18000, 28800, 46800]
+//	testing      [10, 20, 30]
+//
+// Sorted ascending because the n-th shot must require more uptime than the
+// (n-1)-th — an out-of-order list would make a later shot due before an earlier
+// one and the counter would run backwards.
+//
+// Non-positive entries are dropped rather than honoured: a zero threshold means
+// "due the instant the node is first seen", which is not a statement about
+// uptime at all. If that leaves nothing, the default stands.
+func parseScheduleSec(sec []float64) []time.Duration {
+	if len(sec) == 0 {
 		return DefaultSchedule
 	}
-	out := make([]time.Duration, 0, len(hours))
-	for _, h := range hours {
-		if h <= 0 {
+	out := make([]time.Duration, 0, len(sec))
+	for _, s := range sec {
+		if s <= 0 {
 			continue
 		}
-		out = append(out, time.Duration(h*float64(time.Hour)))
+		out = append(out, time.Duration(s*float64(time.Second)))
 	}
 	if len(out) == 0 {
 		return DefaultSchedule
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// hoursToSec converts the superseded `schedule_hours` spelling. Configs are
+// already deployed with it, and dropping it would silently reset an operator's
+// ladder to the default.
+func hoursToSec(hours []float64) []float64 {
+	out := make([]float64, 0, len(hours))
+	for _, h := range hours {
+		out = append(out, h*3600)
+	}
 	return out
 }
 

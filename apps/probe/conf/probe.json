@@ -2,15 +2,25 @@
   "node_bridge_addr": "http://127.0.0.1:8443",
   "refresh_sec": 3600,
   "fire_interval_sec": 60,
-  "schedule_hours": [
-    1,
-    3,
-    5,
-    8,
-    13
+
+  "schedule_sec": [
+    3600,
+    10800,
+    18000,
+    28800,
+    46800
   ],
+
   "response_deadline_sec": 30,
-  "question_generator_service": "llm-api",
+
+  "generators": [
+    "this"
+  ],
+  "generator_service": "llm-api",
+
+  "clips": [],
+  "clip_service": "clip-api",
+
   "question_fanout": 5,
   "db": "probe.db",
   "queue_low_water": 10,

@@ -16,6 +16,7 @@ package probe
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/isannai/mesh/pkg/rvnodes"
@@ -30,7 +31,7 @@ type Target struct {
 
 // eligible filters the directory down to nodes worth firing at.
 //
-// Two conditions, and deliberately no more:
+// Two conditions on the node itself, and deliberately no more:
 //
 //   - public: a protected node rejects an anonymous probe, so firing at one
 //     produces a refusal that says nothing about the node.
@@ -40,9 +41,14 @@ type Target struct {
 // (pkg/stationwire MinMaxQueue), so any node built from this tree already
 // satisfies it, and re-checking here would only reject nodes for advertising
 // honestly. The value is recorded instead.
-func eligible(nodes []rvnodes.Node) []Target {
+//
+// `exclude` drops the prober's own node — see excluded.
+func eligible(nodes []rvnodes.Node, exclude map[string]bool) []Target {
 	var out []Target
 	for _, n := range nodes {
+		if exclude[strings.ToLower(nodeAddressOf(n.ID))] {
+			continue
+		}
 		if !n.IsPublic() {
 			continue
 		}
@@ -53,6 +59,49 @@ func eligible(nodes []rvnodes.Node) []Target {
 		out = append(out, Target{Node: n, Service: svc, Slash24: n.Slash24()})
 	}
 	return out
+}
+
+// excluded is the set of node addresses the prober must not fire at.
+//
+// Only itself. A prober that fires at its own node signs tickets for a machine
+// it controls, and no reading of the faucet makes that a measurement.
+//
+// The nodes that WRITE the questions are deliberately NOT excluded. A writer
+// knows the model-written categories in advance, but arithmetic is generated
+// here, fresh per shot, and is half the mix — so an allied node still has to
+// answer something it could not have prepared. On a small network the ally may
+// also be the only public node there is, and excluding it would leave the
+// prober with nothing to do.
+//
+// Keyed on the bare address so "S:0xAB…", "0xab…" and a favorite alias's
+// resolved id all collapse to one key.
+func excluded(selfID string) map[string]bool {
+	out := map[string]bool{}
+	if a := strings.ToLower(nodeAddressOf(selfID)); a != "" {
+		out[a] = true
+	}
+	return out
+}
+
+// selfIfExcluded returns the self id to exclude, or "" when the operator has
+// asked for self-firing. Separated from excluded() so the flag is read in one
+// place and the exclusion rule itself stays unconditional.
+func selfIfExcluded(cfg Config, selfID string) string {
+	if cfg.FireAtSelf {
+		return ""
+	}
+	return selfID
+}
+
+// nodeAddressOf strips a role prefix ("S:0xab…" → "0xab…"). isannd does the
+// same thing on the way out (nodeIDAddress); the prefix names a role, not an
+// identity, so it must not make two spellings of one node look like two nodes.
+func nodeAddressOf(id string) string {
+	id = strings.TrimSpace(id)
+	if i := strings.Index(id, ":"); i >= 0 {
+		id = id[i+1:]
+	}
+	return strings.TrimSpace(id)
 }
 
 // groupBySlash24 buckets the due targets by /24.

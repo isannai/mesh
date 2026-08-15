@@ -47,20 +47,86 @@ type Config struct {
 	// schedule below, so a shorter interval only means a due node is served
 	// sooner, never that more shots go out.
 	FireIntervalSec int `json:"fire_interval_sec"`
-	// ScheduleHours is the uptime each shot requires, in hours. The n-th shot
+	// ScheduleSec is the uptime each shot requires, in SECONDS. The n-th shot
 	// comes due once the node has been continuously present that long — see
 	// schedule.go. The list length IS the daily cap.
-	ScheduleHours []float64 `json:"schedule_hours"`
+	//
+	// Seconds because the same field has to be readable at both ends: the real
+	// ladder is hours (3600 = 1h), but a smoke test wants ten seconds, and
+	// writing ten seconds in hours is 0.00277.
+	ScheduleSec []float64 `json:"schedule_sec"`
+	// ScheduleHours is the superseded spelling, read only to migrate configs
+	// already in the field. ScheduleSec wins when both are set.
+	ScheduleHours []float64 `json:"schedule_hours,omitempty"`
 	// ResponseDeadline is the base answer allowance in seconds, scaled up for
 	// larger declared models so a bigger machine is not penalised for being one.
 	ResponseDeadline int `json:"response_deadline_sec"`
-	// QuestionGeneratorService is THIS node's own text service, used to write
-	// geography/animal/colour questions in batches. It is not a probe target
-	// and has nothing to do with what gets fired at: arithmetic is generated in
-	// code, and image probes are a separate track with their own validator.
-	// Empty ⇒ arithmetic only.
-	QuestionGeneratorService string `json:"question_generator_service"`
-	DB                       string `json:"db"`
+	// Generators are the nodes that write geography/animal/colour questions, in
+	// round-robin order. A prober is a small machine and need not host a model
+	// itself, so this is normally an allied node.
+	//
+	// 🔴 ABSENT AND EMPTY MEAN DIFFERENT THINGS, which is why it is a pointer:
+	//
+	//	absent  → ["this"]   the old behaviour, kept for configs already deployed
+	//	[]      → no generation at all; arithmetic only, chosen deliberately
+	//
+	// Encoding/json cannot tell those apart in a plain slice — both arrive as
+	// len 0 — and collapsing them would make "I explicitly turned generation
+	// off" silently restart it against a node with no engine.
+	//
+	// Items are "<node>" or "<node>/<service>"; "" / "this" / "local" / "self"
+	// all mean this node. Not a probe target either way: arithmetic is written
+	// in code, and image probes are a separate track with their own validator.
+	Generators *[]string `json:"generators,omitempty"`
+	// GeneratorService is the service name used for entries that do not name
+	// one. Allies usually run the same engine, so this carries the common case.
+	GeneratorService string `json:"generator_service"`
+	// QuestionGeneratorService is the superseded single-service form. Read only
+	// to migrate configs already in the field — GeneratorService wins when both
+	// are set.
+	QuestionGeneratorService string `json:"question_generator_service,omitempty"`
+	// Clips are the CLIP validators that judge image probes, same rules as
+	// Generators. Absent or empty both mean the image track is NOT run:
+	// unlike questions there is no code-generated fallback, and firing at an
+	// image node with no judge waiting only burns someone else's GPU.
+	Clips *[]string `json:"clips,omitempty"`
+	// ClipService is the service name for clip entries that do not name one.
+	ClipService string `json:"clip_service"`
+	// ImageSizes overrides the resolutions an image order may ask for. Left
+	// empty — the normal case — the target's own declared architecture picks:
+	// 512x512 for an sd15-class model, 1024x1024 for SDXL. See imageParams.
+	//
+	// It exists as an operator escape hatch for a fleet whose declared
+	// architecture does not match what the hardware can actually render.
+	//
+	// 🔴 Only sizes SD actually handles. It produces garbage or refuses outright
+	// on arbitrary dimensions, and that would read as an honest node failing.
+	//
+	// There is no step knob, deliberately. The engine manifest declares
+	// `steps` with a default and the prober simply omits the field, so the
+	// engine's own default applies — see imageRun.
+	ImageSizes []string `json:"image_sizes"`
+	// ImageDeadline is how long a node has to draw a picture, in seconds.
+	//
+	// Much longer than the text allowance and configurable rather than fixed:
+	// generation time is dominated by the card, and a 4GB GPU spilling to
+	// system memory takes minutes on the same 512x512 that a 12GB card does in
+	// half a minute. A cap tuned to the fast machine records the slow one as a
+	// timeout, which measures our impatience rather than the node.
+	ImageDeadline int `json:"image_deadline_sec"`
+	// FireAtSelf lets the prober fire at its OWN node.
+	//
+	// Off by default, and for a reason that is not arbitrary: a prober signs the
+	// tickets, so firing at itself means signing tickets for a machine it
+	// controls. That is not a measurement under any reading.
+	//
+	// It exists because a single-PC setup has nowhere else to aim. isannd
+	// short-circuits a self-reference to in-process serving (isSelfNodeRef), so
+	// the whole submit → collect → judge path still runs — only the RV lookup
+	// and the NAT hop are skipped, and neither is what the image track is
+	// exercising. Turn it on to try the pipeline; leave it off in production.
+	FireAtSelf bool `json:"fire_at_self"`
+	DB          string `json:"db"`
 	// QueueLowWater is the refill threshold: when a category has fewer than
 	// this many unused questions left, another batch is generated. Questions
 	// are consumed once and discarded (that is what makes a cache attack
@@ -87,16 +153,83 @@ const defaultIsanndURL = "http://127.0.0.1:8443"
 // DefaultConfig returns the settings the prober runs with when nothing is set.
 func DefaultConfig() Config {
 	return Config{
-		RefreshSec:               3600,
-		FireIntervalSec:          60,
-		ScheduleHours:            []float64{1, 3, 5, 8, 13},
-		ResponseDeadline:         30,
-		QuestionGeneratorService: "llm-api",
-		DB:                       "probe.db",
-		QueueLowWater:            10,
-		ObservationDays:          30,
-		QuestionFanout:           5,
+		RefreshSec:       3600,
+		FireIntervalSec:  60,
+		// 1 · 3 · 5 · 8 · 13 hours, written out so the file that ships is the
+		// same shape an operator edits.
+		ScheduleSec:      []float64{3600, 10800, 18000, 28800, 46800},
+		ResponseDeadline: 30,
+		GeneratorService: "llm-api",
+		ClipService:      "clip-api",
+		ImageDeadline: 300,
+		// 🔴 ImageSizes stays EMPTY by default. Seeding it here overrode the
+		// architecture logic entirely — imageParams checks the config first, so
+		// a default value meant every node got the same list no matter what it
+		// declared, and the sd15/SDXL split never ran at all.
+		ImageSizes: nil,
+		DB:               "probe.db",
+		QueueLowWater:    10,
+		ObservationDays:  30,
+		QuestionFanout:   5,
 	}
+	// Generators / Clips stay nil here on purpose. Their defaults differ from
+	// "empty" and are applied in LoadConfig, after the file has had its say —
+	// see defaultGenerators / defaultClips.
+}
+
+// Schedule resolves the uptime ladder in seconds.
+//
+// ScheduleSec wins; `schedule_hours` is honoured only when the new key was left
+// alone, so a config mid-migration is not steered by the field being replaced.
+func (c Config) Schedule() []float64 {
+	if len(c.ScheduleSec) > 0 {
+		return c.ScheduleSec
+	}
+	if len(c.ScheduleHours) > 0 {
+		return hoursToSec(c.ScheduleHours)
+	}
+	return nil // parseScheduleSec falls back to DefaultSchedule
+}
+
+// defaultGenerators is what an ABSENT `generators` means: this node, as before.
+// An empty list is not this — that is the operator saying "no generation".
+func defaultGenerators() []string { return []string{selfNode} }
+
+// defaultClips is what an absent `clips` means: none. The image track needs a
+// judge and there is no local fallback for one, so it stays off until named.
+func defaultClips() []string { return nil }
+
+// generatorEntries returns the parsed question-writer pool.
+func (c Config) generatorEntries() []poolEntry {
+	items := defaultGenerators()
+	if c.Generators != nil {
+		items = *c.Generators
+	}
+	return parsePool(items, c.GeneratorService)
+}
+
+// clipEntries returns the parsed validator pool.
+func (c Config) clipEntries() []poolEntry {
+	items := defaultClips()
+	if c.Clips != nil {
+		items = *c.Clips
+	}
+	return parsePool(items, c.ClipService)
+}
+
+// GeneratorNames / ClipNames render the resolved pools as "<node>/<service>"
+// for the boot log. Resolved, not raw: the point is to show what the defaults
+// and the "this"/"local"/"self" spellings actually turned into, which is where
+// a misconfiguration hides.
+func (c Config) GeneratorNames() []string { return describePool(c.generatorEntries()) }
+func (c Config) ClipNames() []string      { return describePool(c.clipEntries()) }
+
+func describePool(entries []poolEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.String())
+	}
+	return out
 }
 
 // LoadConfig reads path, filling anything absent with a default.
@@ -116,10 +249,33 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, err
 	}
 	if err == nil {
+		// The seeded default is cleared before unmarshalling so that a file
+		// carrying only the superseded `schedule_hours` is not overruled by the
+		// default sitting in ScheduleSec. Restored below if the file set
+		// neither.
+		seeded := cfg.ScheduleSec
+		cfg.ScheduleSec = nil
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return cfg, fmt.Errorf("parse %s: %w", path, err)
 		}
+		if len(cfg.ScheduleSec) == 0 && len(cfg.ScheduleHours) == 0 {
+			cfg.ScheduleSec = seeded
+		}
 	}
+	// Absorb the superseded single-service key. Configs are already deployed
+	// with it, and ignoring it would quietly move an operator's generation to
+	// whatever the default happens to be. It only applies when the new key was
+	// left at its default — an explicit generator_service always wins.
+	//
+	// The old key's "empty means arithmetic only" spelling is NOT carried over;
+	// that statement now belongs to `generators: []`. An operator who had it
+	// empty ends up attempting generation against this node, failing, and being
+	// told so in the log — the same arithmetic-only end state, reached loudly.
+	if s := strings.TrimSpace(cfg.QuestionGeneratorService); s != "" &&
+		cfg.GeneratorService == DefaultConfig().GeneratorService {
+		cfg.GeneratorService = s
+	}
+
 	// Mesh config also arrives as environment variables, and those win: the
 	// mesh runtime is what an operator edits through `isann mesh config`.
 	applyEnvOverrides(&cfg)
@@ -146,24 +302,63 @@ func LoadConfig(path string) (Config, error) {
 
 func applyEnvOverrides(cfg *Config) {
 	for name, dst := range map[string]*string{
-		"PROBE_QUESTION_GENERATOR_SERVICE": &cfg.QuestionGeneratorService,
-		"PROBE_DB":                         &cfg.DB,
+		"PROBE_GENERATOR_SERVICE": &cfg.GeneratorService,
+		"PROBE_CLIP_SERVICE":      &cfg.ClipService,
+		"PROBE_DB":                &cfg.DB,
 	} {
 		if v := os.Getenv(name); v != "" {
 			*dst = v
 		}
+	}
+	// Superseded name, still honoured so a mesh config carrying it keeps working.
+	if v := os.Getenv("PROBE_QUESTION_GENERATOR_SERVICE"); v != "" {
+		cfg.GeneratorService = v
+	}
+	// The list forms arrive comma-separated, because a mesh env var is one
+	// string. "none" is how a list is emptied through the environment — an
+	// empty env var is indistinguishable from an unset one, so it cannot mean
+	// "[]" the way the JSON spelling can.
+	for name, dst := range map[string]**[]string{
+		"PROBE_GENERATORS": &cfg.Generators,
+		"PROBE_CLIPS":      &cfg.Clips,
+	} {
+		v := strings.TrimSpace(os.Getenv(name))
+		if v == "" {
+			continue
+		}
+		var items []string
+		if !strings.EqualFold(v, "none") {
+			for _, part := range strings.Split(v, ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					items = append(items, p)
+				}
+			}
+		}
+		if items == nil {
+			items = []string{}
+		}
+		*dst = &items
 	}
 	for name, dst := range map[string]*int{
 		"PROBE_REFRESH_SEC":           &cfg.RefreshSec,
 		"PROBE_FIRE_INTERVAL_SEC":     &cfg.FireIntervalSec,
 		"PROBE_RESPONSE_DEADLINE_SEC": &cfg.ResponseDeadline,
 		"PROBE_QUESTION_FANOUT":       &cfg.QuestionFanout,
+		"PROBE_IMAGE_DEADLINE_SEC":    &cfg.ImageDeadline,
 	} {
 		if v := os.Getenv(name); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
 				*dst = n
 			}
 		}
+	}
+	// 🔴 Only "true"/"1" turns it ON, and nothing turns it off. A prober firing
+	// at its own node signs tickets for itself, which is the one shape a faucet
+	// must not have — so the environment may enable it for a single-node bench
+	// but a typo'd value must never silently do so.
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PROBE_FIRE_AT_SELF"))) {
+	case "true", "1", "yes":
+		cfg.FireAtSelf = true
 	}
 }
 
@@ -176,18 +371,36 @@ type Prober struct {
 	http  *http.Client
 	rng   *rand.Rand
 
+	// validator judges image probes. Disabled unless `clips` names one — there
+	// is no local fallback for judging, and firing at an image node with no
+	// judge waiting only burns someone else's GPU.
+	validator *Validator
+	// exclude is the set of node addresses never fired at: this node and its
+	// helpers. Computed once — the config does not change under a running
+	// process, and neither does this node's identity.
+	exclude map[string]bool
+
 	signer    Signer
 	hasSigner bool
 
 	appt       Appointment
 	hasAppt    bool
 	targets    []Target
+	imgTargets []Target
 	idleLogged bool
 
 	// schedule is the uptime ladder; anchors is each node's continuity start,
 	// both recomputed on refresh.
 	schedule []time.Duration
 	anchors  map[string]time.Time
+
+	// metrics is the RV's volatile per-service view, refreshed alongside the
+	// directory. Two things read it, and neither can be answered from
+	// /v1/nodes: how long this node actually takes (imageDeadline) and whether
+	// it is mid-job right now (fireImageRound). nil until the first successful
+	// poll, and a failed poll leaves the previous one rather than blanking it —
+	// stale numbers beat no numbers for both decisions.
+	metrics *rvnodes.Metrics
 
 	// refilling guards the background question generator so only one round
 	// runs at a time. Atomic because Refresh (one goroutine) starts it and the
@@ -197,6 +410,71 @@ type Prober struct {
 	// prober stops asking every hour: an engine that is not there will not be
 	// there next hour either, and the log line is the same one every time.
 	genFailures int
+}
+
+// roundStats tallies one firing round for the summary line.
+//
+// Atomic because the members of a /24 group fire concurrently — they have to,
+// since a farm sharing one GPU passes serial probes and fails simultaneous ones.
+type roundStats struct {
+	fired     atomic.Int64
+	answered  atomic.Int64
+	pass      atomic.Int64
+	fail      atomic.Int64
+	truncated atomic.Int64
+	queueFull atomic.Int64
+	refused   atomic.Int64
+	timeout   atomic.Int64
+}
+
+// String renders the tally, omitting whatever did not happen. A clean round
+// reads "3 fired, 3 answered (3 pass)" rather than a row of zeros.
+func (s *roundStats) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d fired, %d answered", s.fired.Load(), s.answered.Load())
+	var parts []string
+	for _, p := range []struct {
+		n     int64
+		label string
+	}{
+		{s.pass.Load(), "pass"},
+		{s.fail.Load(), "fail"},
+		{s.truncated.Load(), "truncated"},
+		{s.queueFull.Load(), "queue full"},
+		{s.refused.Load(), "refused"},
+		{s.timeout.Load(), "timeout"},
+	} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.label))
+		}
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(&b, " (%s)", strings.Join(parts, ", "))
+	}
+	return b.String()
+}
+
+// record folds one shot's outcome into the tally.
+func (s *roundStats) record(outcome, verdict string) {
+	s.fired.Add(1)
+	switch outcome {
+	case OutcomeAnswered:
+		s.answered.Add(1)
+	case OutcomeQueueFull:
+		s.queueFull.Add(1)
+	case OutcomeTimeout:
+		s.timeout.Add(1)
+	default:
+		s.refused.Add(1)
+	}
+	switch verdict {
+	case VerdictPass:
+		s.pass.Add(1)
+	case VerdictFail:
+		s.fail.Add(1)
+	case VerdictTruncated:
+		s.truncated.Add(1)
+	}
 }
 
 // genFailureLimit is how many consecutive failed generation rounds it takes
@@ -213,15 +491,22 @@ func New(cfg Config) (*Prober, error) {
 	if err != nil {
 		return nil, err
 	}
+	gens, clips := cfg.generatorEntries(), cfg.clipEntries()
+	client := &http.Client{Timeout: 20 * time.Second}
 	return &Prober{
-		cfg:      cfg,
-		store:    store,
-		firer:    NewFirer(cfg.NodeBridgeAddr),
-		gen:      NewGenerator(cfg.NodeBridgeAddr, cfg.QuestionGeneratorService),
-		http:     &http.Client{Timeout: 20 * time.Second},
-		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
-		schedule: parseSchedule(cfg.ScheduleHours),
-		anchors:  map[string]time.Time{},
+		cfg:       cfg,
+		store:     store,
+		firer:     NewFirer(cfg.NodeBridgeAddr),
+		gen:       NewGenerator(cfg.NodeBridgeAddr, gens),
+		validator: NewValidator(cfg.NodeBridgeAddr, clips),
+		http:      client,
+		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		schedule:  parseScheduleSec(cfg.Schedule()),
+		anchors:   map[string]time.Time{},
+		// Asked once at construction. isannd's /info is ungated for the same
+		// reason the appointment route is, so this needs no wallet; if it fails
+		// the set is simply smaller and the prober may waste a shot on itself.
+		exclude: excluded(selfIfExcluded(cfg, SelfNodeID(cfg.NodeBridgeAddr, client))),
 	}, nil
 }
 
@@ -255,6 +540,25 @@ func (p *Prober) Run() {
 			p.FireRound()
 		}
 	}
+}
+
+// Once runs a single refresh, refill and fire round to completion.
+//
+// 🔴 It cannot just be Refresh + FireRound. Refresh starts the question refill
+// in the BACKGROUND (see startRefill), which is right for the long-running loop
+// and wrong here: the caller returns as soon as FireRound does, so the generator
+// goroutine is killed mid-call and the round fires from a queue that was never
+// filled. On a fresh database that is EVERY question, and the run looks like a
+// working prober that simply had nothing to ask.
+func (p *Prober) Once() {
+	p.Refresh()
+	// Poll rather than share a channel: refills are started from two places
+	// (every Refresh) and only this one waits, so a WaitGroup would have to be
+	// reset on each round for a case that happens once per process.
+	for p.refilling.Load() {
+		time.Sleep(200 * time.Millisecond)
+	}
+	p.FireRound()
 }
 
 // Refresh re-reads the appointment, the directory and the question queue.
@@ -317,11 +621,29 @@ func (p *Prober) Refresh() {
 		log.Printf("[probe] %v", err)
 		return
 	}
+	// The volatile view, polled with the directory. A failure here is not fatal
+	// to the round: firing still works, it just falls back to the floor
+	// deadline and skips the busy check. Blanking p.metrics on error would turn
+	// one flaky poll into a round that mis-sizes every deadline.
+	if m, merr := rvnodes.FetchMetrics(p.cfg.NodeBridgeAddr); merr != nil {
+		log.Printf("[probe] metrics: %v (using previous)", merr)
+	} else {
+		p.metrics = m
+	}
+
 	now := time.Now()
 	if err := p.store.RecordObservations(observationsOf(nodes), now); err != nil {
 		log.Printf("[probe] record observations: %v", err)
 	}
-	p.targets = eligible(nodes)
+	p.targets = eligible(nodes, p.exclude)
+	// Image targets only when there is a judge. Ordering a picture with no
+	// validator to look at it burns someone else's GPU for a result that gets
+	// thrown away — see image.go.
+	if p.validator.Enabled() {
+		p.imgTargets = imageTargets(nodes, p.exclude)
+	} else {
+		p.imgTargets = nil
+	}
 
 	// Continuity anchors, recomputed from the observation history this poll
 	// just extended. Derived from the table rather than kept in memory so a
@@ -331,7 +653,7 @@ func (p *Prober) Refresh() {
 	} else {
 		p.anchors = anchorsFrom(sightings)
 	}
-	log.Printf("[probe] directory: %d nodes, %d eligible", len(nodes), len(p.targets))
+	log.Printf("[probe] directory: %d nodes, %d eligible, %d image", len(nodes), len(p.targets), len(p.imgTargets))
 
 	p.startRefill()
 	p.prune(now)
@@ -367,18 +689,24 @@ func (p *Prober) refillQueue() {
 	}
 	now := time.Now()
 
-	if depth[CatMath] < p.cfg.QueueLowWater {
-		if err := p.store.AddQuestions(FillMath(batchTarget, p.rng), now); err != nil {
-			log.Printf("[probe] refill math: %v", err)
+	// Code-written categories first: they need no engine, cannot fail, and
+	// cannot run dry, so the queue is never empty even when every writer is
+	// unreachable.
+	for _, spec := range codeSpecs {
+		if depth[spec.cat] >= p.cfg.QueueLowWater {
+			continue
+		}
+		if _, err := p.store.AddQuestions(FillCode(spec, batchTarget, p.rng), now); err != nil {
+			log.Printf("[probe] refill %s: %v", spec.cat, err)
 		}
 	}
-	// Everything below needs an engine on THIS node. Without one the prober
-	// runs on arithmetic alone — not a degraded mode so much as a narrower
-	// one: math is half the intended mix anyway, and it is the only category
-	// whose answers are certain, so it never needs a re-check panel.
+	// Everything below needs a writer — this node or an ally. With none the
+	// prober runs on arithmetic alone, which is not so much a degraded mode as
+	// a narrower one: math is half the intended mix anyway, and it is the only
+	// category whose answers are certain, so it never needs a re-check panel.
 	if !p.gen.HasEngine() {
 		if p.genFailures == 0 {
-			log.Printf("[probe] no question generator service configured — arithmetic questions only")
+			log.Printf("[probe] no question writers configured (`generators`) — arithmetic questions only")
 			p.genFailures = genFailureLimit // say it once, not every hour
 		}
 		return
@@ -398,17 +726,24 @@ func (p *Prober) refillQueue() {
 			failed = true
 			continue
 		}
-		if err := p.store.AddQuestions(qs, now); err != nil {
+		added, err := p.store.AddQuestions(qs, now)
+		if err != nil {
 			log.Printf("[probe] store %s batch: %v", spec.cat, err)
 			continue
+		}
+		// Duplicates are worth saying out loud: a batch that is nearly all
+		// repeats means the topic's answer space is running dry, and the queue
+		// will start leaning on arithmetic whether or not anyone notices.
+		if added < len(qs) {
+			log.Printf("[probe] %s: %d new, %d already asked", spec.cat, added, len(qs)-added)
 		}
 		p.genFailures = 0 // one success clears the count
 	}
 	if failed {
 		p.genFailures++
 		if p.genFailures >= genFailureLimit {
-			log.Printf("[probe] question generation has failed %d times — falling back to arithmetic only (fix %q, then restart)",
-				p.genFailures, p.cfg.QuestionGeneratorService)
+			log.Printf("[probe] question generation has failed %d times — falling back to arithmetic only (check `generators`: %v)",
+				p.genFailures, p.gen.Writers())
 		}
 	}
 }
@@ -447,7 +782,7 @@ func (p *Prober) prune(now time.Time) {
 // question supply affordable: 50,000 shots a day would need 50,000 questions
 // one-per-shot, but a few thousand this way.
 func (p *Prober) FireRound() {
-	if !p.hasAppt || len(p.targets) == 0 {
+	if !p.hasAppt || (len(p.targets) == 0 && len(p.imgTargets) == 0) {
 		return
 	}
 	now := time.Now()
@@ -463,14 +798,39 @@ func (p *Prober) FireRound() {
 	// No random draw and no budget: a node is here because it EARNED the shot
 	// by staying up past the next threshold. Load spreads on its own, since
 	// nodes anchor at whatever time they happened to connect.
+	// One line per round, so a working prober is not silent. Declared up here
+	// because BOTH tracks report into it.
+	var stats roundStats
+
+	// 🔴 The two tracks are independent. An earlier version returned here when
+	// no text node was due, which silently took the image round with it — a
+	// node serving only sd-api was then never fired at, and the log said
+	// nothing at all because the summary line lives past this point.
 	due := dueTargets(p.targets, p.anchors, counts, p.schedule, now)
-	if len(due) == 0 {
-		return
-	}
 	groups := groupBySlash24(due)
-	if len(groups) == 0 {
-		return
+	if len(groups) > 0 {
+		p.fireTextGroups(groups, now, &stats)
 	}
+
+	p.fireImageRound(now, counts, &stats)
+
+	if stats.fired.Load() > 0 {
+		log.Printf("[probe] round: %s", &stats)
+	}
+	return
+}
+
+// fireTextGroups runs the text half of a round.
+//
+// HOW QUESTIONS ARE SHARED — the two rules point in opposite directions, and
+// both matter:
+//
+//	within one /24    DIFFERENT questions. Nodes behind one connection may be
+//	                  one machine wearing several hats; giving them the same
+//	                  question lets it generate once and copy the answer.
+//	across /24s       THE SAME question. Unrelated networks answering the same
+//	                  thing at the same moment is a free cross-check.
+func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, stats *roundStats) {
 
 	questions := p.takeQuestions(questionsNeeded(groups, p.cfg.QuestionFanout), now)
 	if len(questions) == 0 {
@@ -509,7 +869,7 @@ func (p *Prober) FireRound() {
 				inner.Add(1)
 				go func(t Target, q Question) {
 					defer inner.Done()
-					p.fireOne(t, q)
+					p.fireOne(t, q, stats)
 				}(t, qs[i])
 			}
 			inner.Wait()
@@ -583,7 +943,7 @@ func (p *Prober) takeQuestions(n int, now time.Time) []Question {
 }
 
 // fireOne runs one question through one node, submit to result.
-func (p *Prober) fireOne(t Target, q Question) {
+func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 	now := time.Now()
 
 	sh := Shot{
@@ -612,6 +972,7 @@ func (p *Prober) fireOne(t Target, q Question) {
 		return
 	}
 	if serr != nil || res.Outcome != OutcomeSubmitted {
+		stats.record(sh.Outcome, "")
 		if serr != nil {
 			log.Printf("[probe] %s: %v", short(t.Node.ID), serr)
 		}
@@ -628,19 +989,45 @@ func (p *Prober) fireOne(t Target, q Question) {
 		if err := p.store.FailShot(id, end, outcome); err != nil {
 			log.Printf("[probe] fail shot: %v", err)
 		}
+		stats.record(outcome, "")
 		if ferr != nil {
 			log.Printf("[probe] %s: %v", short(t.Node.ID), ferr)
 		}
 		return
 	}
 
+	// Scored here, in the same write as the answer. The raw text is kept
+	// alongside the verdict either way: it is what makes a disputed question
+	// re-examinable without firing at the node again.
+	verdict := Score(q, fetched.Answer, fetched.CompletionTokens)
+	stats.record(OutcomeAnswered, verdict)
+
 	// Observed latency, not the node's generation time — the two differ by
 	// however long the polling loop waited before asking. Stored as an upper
 	// bound and labelled as such in the schema.
 	if err := p.store.CompleteShot(id, end, end.Sub(now).Milliseconds(),
-		fetched.PromptTokens, fetched.CompletionTokens, fetched.Answer, OutcomeAnswered); err != nil {
+		fetched.PromptTokens, fetched.CompletionTokens, fetched.Answer, OutcomeAnswered, verdict); err != nil {
 		log.Printf("[probe] complete shot: %v", err)
 	}
+	switch verdict {
+	case VerdictFail:
+		log.Printf("[probe] %s answered %q, expected %q (%s)",
+			short(t.Node.ID), trim(fetched.Answer), q.Draft, q.Category)
+	case VerdictTruncated:
+		// Our cap, not the node's mistake. Logged loudly because a run of these
+		// means probeMaxTokens is set too low for the answers being asked for.
+		log.Printf("[probe] %s hit the %d-token cap: %q (expected %q) — not scored",
+			short(t.Node.ID), probeMaxTokens, trim(fetched.Answer), q.Draft)
+	}
+}
+
+// trim shortens an answer for a log line.
+func trim(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) > 60 {
+		return s[:60] + "…"
+	}
+	return s
 }
 
 // deadlineFor scales the response allowance to the declared model.

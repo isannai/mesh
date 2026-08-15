@@ -33,22 +33,47 @@ import (
 type Category string
 
 const (
-	CatMath      Category = "math"
+	// Written in code. Certain answers, unbounded supply, and nothing a
+	// generator node could leak in advance.
+	CatMath     Category = "math"
+	CatSequence Category = "sequence"
+	CatUnits    Category = "units"
+
+	// Written by a model.
 	CatGeography Category = "geography"
-	CatAnimal    Category = "animal"
-	CatColor     Category = "color"
+	CatElement   Category = "element"
+	CatCurrency  Category = "currency"
 )
 
-// categoryMix is the sampling weight per category (llama-faucet-probe.md §7).
-// math 50% because it needs no re-check; the rest split the remainder.
+// categoryMix is the sampling weight per category.
+//
+// Code-generated categories carry the majority (55%) because their answers are
+// certain: a mismatch is the node's fault and never needs a re-check panel.
+//
+// 🔴 WHAT DECIDES A CATEGORY'S PLACE HERE IS ITS ANSWER SPACE, not how
+// interesting the question is. Two categories were removed outright for failing
+// that test:
+//
+//	animal   "how many legs" has four real answers. A node replying "four" to
+//	         everything scored about 40%.
+//	colour   about ten answers, so roughly 15% for free.
+//
+// No amount of extra QUESTIONS fixes a small ANSWER space — the guesser does
+// not read the question. Every category below has hundreds of possible answers
+// (capitals, elements, currencies) or unbounded ones (the numeric three).
+//
+// Binary-choice forms were considered and rejected for the same reason: "which
+// is larger, 47 or 74" hands out 50% to a coin.
 var categoryMix = []struct {
 	cat    Category
 	weight int
 }{
-	{CatMath, 50},
-	{CatGeography, 20},
-	{CatAnimal, 15},
-	{CatColor, 15},
+	{CatMath, 35},
+	{CatSequence, 10},
+	{CatUnits, 10},
+	{CatGeography, 15},
+	{CatElement, 15},
+	{CatCurrency, 15},
 }
 
 // Question is one item of the queue.
@@ -129,7 +154,7 @@ var mathFewshot = []QA{
 	{Q: "What is 40 - 15?", A: "25"},
 }
 
-// newMathQuestion builds a two-digit addition or subtraction.
+// newMathQuestion builds an addition or subtraction, two or three digits.
 //
 // Multiplication is deliberately excluded: 3B-class models get two-digit
 // products wrong often enough that the question would measure model size rather
@@ -137,9 +162,19 @@ var mathFewshot = []QA{
 //
 // Subtraction is ordered so the result is never negative — a minus sign is a
 // second token and an extra way for a correct node to look wrong.
+//
+// Three-digit operands appear half the time. Two-digit alone gives 16,200
+// distinct questions, which sounds like plenty until the same node is probed
+// for months; adding the wider range costs nothing and takes it past 800,000.
 func newMathQuestion(rng *rand.Rand) Question {
-	a := rng.Intn(90) + 10 // 10..99
-	b := rng.Intn(90) + 10
+	lo, hi := 10, 99
+	if rng.Intn(2) == 0 {
+		lo, hi = 100, 999
+	}
+	span := hi - lo + 1
+	a := rng.Intn(span) + lo
+	b := rng.Intn(span) + lo
+
 	if rng.Intn(2) == 0 {
 		return Question{
 			Category: CatMath,
@@ -159,43 +194,145 @@ func newMathQuestion(rng *rand.Rand) Question {
 	}
 }
 
+// sequenceFewshot shows the shape: a run of numbers, one number back.
+var sequenceFewshot = []QA{
+	{Q: "What comes next: 2, 4, 6, 8?", A: "10"},
+	{Q: "What comes next: 5, 10, 15, 20?", A: "25"},
+}
+
+// newSequenceQuestion builds an arithmetic run and asks for the next term.
+//
+// Arithmetic steps only — a geometric run reaches four digits by the fifth term
+// and turns into the multiplication question that is banned above.
+//
+// The answer is an ordinary number, so the answer space is unbounded and a
+// guesser gets nothing. That is the whole reason this category exists: it adds
+// variety without adding a small set of things to guess from.
+func newSequenceQuestion(rng *rand.Rand) Question {
+	start := rng.Intn(20) + 1 // 1..20
+	step := rng.Intn(11) + 2  // 2..12
+	terms := make([]string, 4)
+	for i := range terms {
+		terms[i] = strconv.Itoa(start + i*step)
+	}
+	return Question{
+		Category: CatSequence,
+		Q:        fmt.Sprintf("What comes next: %s?", strings.Join(terms, ", ")),
+		Draft:    strconv.Itoa(start + 4*step),
+		Fewshot:  sequenceFewshot,
+	}
+}
+
+// unitsFewshot keeps the answer shape numeric.
+var unitsFewshot = []QA{
+	{Q: "How many centimeters are in 3 meters?", A: "300"},
+	{Q: "How many grams are in 4 kilograms?", A: "4000"},
+}
+
+// unitConversions are the metric steps used. Powers of ten only: the point is a
+// question whose answer is certain, not a units exam, and a factor like 2.54
+// would invite rounding disagreements that fail honest nodes.
+var unitConversions = []struct {
+	from, to string
+	factor   int
+}{
+	{"meters", "centimeters", 100},
+	{"meters", "millimeters", 1000},
+	{"centimeters", "millimeters", 10},
+	{"kilometers", "meters", 1000},
+	{"kilograms", "grams", 1000},
+	{"liters", "milliliters", 1000},
+}
+
+// newUnitsQuestion builds a metric conversion.
+//
+// It is multiplication, but only by 10, 100 or 1000 — appending zeros, which
+// even a small model does reliably. That is a different task from the two-digit
+// products the mix excludes.
+func newUnitsQuestion(rng *rand.Rand) Question {
+	c := unitConversions[rng.Intn(len(unitConversions))]
+	n := rng.Intn(98) + 2 // 2..99
+	return Question{
+		Category: CatUnits,
+		Q:        fmt.Sprintf("How many %s are in %d %s?", c.to, n, c.from),
+		Draft:    strconv.Itoa(n * c.factor),
+		Fewshot:  unitsFewshot,
+	}
+}
+
+// codeSpec is a category written in code rather than by a model.
+//
+// Collected in one table so the refill loop treats them uniformly. They share
+// three properties the model-written ones do not have: the answer is certain,
+// the supply is unbounded, and nothing about them can leak to whichever node
+// writes the other questions.
+type codeSpec struct {
+	cat Category
+	gen func(*rand.Rand) Question
+}
+
+var codeSpecs = []codeSpec{
+	{CatMath, newMathQuestion},
+	{CatSequence, newSequenceQuestion},
+	{CatUnits, newUnitsQuestion},
+}
+
 // ---------------------------------------------------------------------------
 // llama-generated categories
 // ---------------------------------------------------------------------------
 
-// genSpec is how one category asks the local model for a batch.
-//
-// Every prompt demands the same "<question> | <answer>" line format so one
-// parser handles all of them, and every one insists on a single common English
-// word so the answer stays inside the scoring window.
+// genSpec is how one category asks a model for a batch. Only the topic differs
+// between categories — the output contract lives in genSystem, shared by all of
+// them, so changing the line format is one edit and not three.
 type genSpec struct {
-	cat    Category
-	prompt string
+	cat   Category
+	topic string
 }
 
-// genSpecs are the batch-generation prompts.
+// genBatchLines is how many lines a generation call asks for.
 //
-// Only the geography prompt is from the spec (llama-faucet-probe.md §5); animal
-// and color are written to the same shape. All three avoid the banned kinds:
-// letter counting and string reversal (tokeniser artefacts, not knowledge), date
-// arithmetic, dates and biographical detail, and anything with a debatable
-// answer.
+// 22, not 20: parseBatch spends the first two usable lines on the few-shot pair,
+// so a batch of 20 yields 18 askable questions.
+const genBatchLines = 22
+
+// genSystem is the output contract, sent as the system message.
+//
+// It goes in `system` rather than being prepended to the prompt because an
+// instruct model follows format rules markedly better from the system role —
+// measured against a run that put all of this in the user turn.
+//
+// Kept free of any topic wording: the same contract has to hold for geography,
+// animals and colour, and a rule that mentions countries would leak into the
+// colour batch.
+var genSystem = fmt.Sprintf(`You write quiz questions for an automated test.
+Output exactly %d lines and nothing else.
+Each line: <question> | <answer>
+The answer must be a single common English word or number.
+Never ask anything with more than one defensible answer.
+No numbering, no blank lines, no commentary.`, genBatchLines)
+
+// genSpecs are the per-category topics.
+//
+// 🔴 EVERY TOPIC HERE IS CHOSEN FOR THE SIZE OF ITS ANSWER SPACE. Continents
+// were dropped from geography for having seven answers, and the animal and
+// colour categories were removed outright for having four and ten — a node
+// replying "four" or "blue" to everything scored 30-40% without reading the
+// question. What survives has hundreds of answers each:
+//
+//	capitals and cities   ~200 countries, and the reverse direction doubles
+//	                      the question supply from the same knowledge
+//	elements              118 symbols, each one or two letters, no ambiguity
+//	currencies            ~150, a handful shared (the euro) and harmless
+//
+// All avoid the banned kinds: letter counting and string reversal (tokeniser
+// artefacts, not knowledge), date arithmetic, dates and biographical detail,
+// superlatives (too few possible questions), and anything with more than one
+// defensible answer — which is why "the opposite of hot" and "the language
+// spoken in X" are not here.
 var genSpecs = []genSpec{
-	{CatGeography, `Generate 20 quiz questions about world capitals and continents.
-Each must have exactly one common English word as its answer.
-Use only well-known countries.
-One per line, format: <question> | <answer>. No numbering, no extra text.`},
-
-	{CatAnimal, `Generate 20 quiz questions about common animals: what class an animal
-belongs to, or how many legs it has.
-Each must have exactly one common English word or number as its answer.
-Use only animals a child would recognise.
-One per line, format: <question> | <answer>. No numbering, no extra text.`},
-
-	{CatColor, `Generate 20 quiz questions about the usual colour of everyday objects.
-Each must have exactly one common English colour word as its answer.
-Use only objects with one obvious colour.
-One per line, format: <question> | <answer>. No numbering, no extra text.`},
+	{CatGeography, "Topic: capital cities of well-known countries, and which country a well-known city is in. Mix both directions."},
+	{CatElement, "Topic: chemical elements — ask for the chemical symbol given the element's name."},
+	{CatCurrency, "Topic: the currency used in well-known countries."},
 }
 
 // parseBatch turns a generation response into questions.

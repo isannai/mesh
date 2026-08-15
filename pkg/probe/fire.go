@@ -19,6 +19,7 @@ package probe
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,11 +34,24 @@ import (
 
 // Measured generation settings (llama-faucet-probe.md §6).
 const (
-	// probeMaxTokens is 64, NOT the 4-8 that "one word answers" suggests.
-	// Truncating at 4 tokens cuts multi-token proper nouns ("Phys|ic|ist") and
-	// fails honest nodes; the short answer comes from the stop sequence
-	// instead. It also gives tokens-per-second something to measure.
-	probeMaxTokens = 64
+	// probeMaxTokens is a BACKSTOP, not what makes answers short — the stop
+	// sequence ends generation at the first newline, so a node that behaves
+	// normally never reaches this at all. What the number decides is only what
+	// happens to an answer that keeps going.
+	//
+	// NOT the 4-8 that "one word answers" suggests: that truncates multi-token
+	// proper nouns and fails honest nodes. "Ouagadougou" and "Antananarivo" run
+	// to six or seven tokens on a Llama tokeniser, and a leading space token
+	// eats one more. 16 clears the longest capital name with room to spare.
+	//
+	// It is not the defence against a node answering with a LIST either — that
+	// is the word gate in score.go (maxExtraWords), which caps a one-word draft
+	// at three words no matter how many tokens were allowed.
+	//
+	// A shot cut off here is recorded as VerdictTruncated rather than a failure,
+	// so setting this too low shows up in the log instead of quietly failing
+	// honest nodes.
+	probeMaxTokens = 16
 	// Deterministic — the same question must not become easier or harder
 	// depending on sampling luck.
 	probeTemperature = 0
@@ -202,11 +216,21 @@ func (f *Firer) Submit(t Target, q Question) (SubmitResult, error) {
 			fmt.Errorf("service %q declares no prompt parameter", t.Service.Name)
 	}
 
-	payload, err := json.Marshal(map[string]any{"service": t.Service.Name, "run": run})
+	return f.SubmitRun(t.Node.ID, t.Service.Name, run)
+}
+
+// SubmitRun posts an arbitrary run block to one node's service.
+//
+// Split out of Submit so the question GENERATOR can reach an allied node the
+// same way — same path, same anonymous posture, same 429 handling. The only
+// difference between asking a node a quiz question and asking an ally to write
+// twenty is what goes in the run map.
+func (f *Firer) SubmitRun(nodeID, svc string, run map[string]any) (SubmitResult, error) {
+	payload, err := json.Marshal(map[string]any{"service": svc, "run": run})
 	if err != nil {
 		return SubmitResult{Outcome: OutcomeRefused}, err
 	}
-	endpoint := f.nodeBase(t.Node.ID) + "/svc/" + url.PathEscape(t.Service.Name) + "/v1/jobs"
+	endpoint := f.nodeBase(nodeID) + "/svc/" + url.PathEscape(svc) + "/v1/jobs"
 	body, code, err := f.post(endpoint, payload, 30*time.Second)
 	if err != nil {
 		return SubmitResult{Outcome: OutcomeRefused}, err
@@ -341,6 +365,206 @@ func (f *Firer) result(base, jobID string) (FetchResult, error) {
 // a little more helps a human see what went wrong, and keeping a whole runaway
 // generation helps nobody.
 const answerLimit = 512
+
+// imageLimit bounds a collected image.
+//
+// 🔴 An image CANNOT go through Collect. That path truncates at answerLimit
+// (512 bytes) because a text answer longer than that is a runaway generation —
+// but a 512x512 PNG is half a megabyte of base64, so the same rule would return
+// a corrupted stub and every image probe would fail for a reason nobody could
+// see.
+//
+// A limit is still needed, just a different one: the reply comes from a node
+// that may be hostile, and "however many bytes it feels like sending" is not an
+// acceptable allocation. 8MB leaves an order of magnitude over a 512² PNG.
+const imageLimit = 8 << 20
+
+// CollectImage polls an image job and returns the generated image as base64.
+//
+// The string is passed straight to the validator without decoding: the engine
+// produces base64 (sd manifest result.content_path = data[0].b64_json) and CLIP
+// accepts base64, so decoding it here would only be a chance to corrupt it.
+func (f *Firer) CollectImage(nodeID, jobID string, deadline time.Duration) (string, error) {
+	base := f.nodeBase(nodeID)
+	stop := time.Now().Add(deadline)
+
+	wait := time.Second
+	const maxWait = 5 * time.Second
+	for {
+		body, code, err := f.get(base+"/v1/jobs/"+url.PathEscape(jobID), 15*time.Second)
+		if err != nil {
+			return "", err
+		}
+		if code != http.StatusOK {
+			return "", fmt.Errorf("job status: HTTP %d", code)
+		}
+		var st struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		if err := json.Unmarshal(body, &st); err != nil {
+			return "", fmt.Errorf("parse job status: %w", err)
+		}
+		switch st.Status {
+		case "done":
+			return f.imageResult(base, jobID)
+		case "failed":
+			return "", fmt.Errorf("job failed: %s", st.Error)
+		}
+		if time.Now().After(stop) {
+			return "", errImageTimeout
+		}
+		time.Sleep(wait)
+		if wait < maxWait {
+			wait *= 2
+		}
+	}
+}
+
+// errImageTimeout separates "the node never finished" from a transport fault,
+// so the caller can record OutcomeTimeout rather than a refusal.
+var errImageTimeout = fmt.Errorf("image job did not finish in time")
+
+// AwaitJSON polls a job to completion and returns its result body verbatim.
+//
+// 🔴 SUBMITTING IS NOT ANSWERING. `POST /v1/jobs` replies 202 with
+// `{"job_id":…}` — even with `?timeout=`, which the station does not honour on
+// this route. Reading that reply as the answer is how the validator call failed
+// with "verdict carries no checks": CLIP had judged the picture correctly and
+// the prober was parsing the submission receipt.
+//
+// Verbatim because the caller wants the engine's own JSON. Collect() exists for
+// the text path and pulls a completion string out of the OpenAI shape, which
+// would discard a judgement wholesale.
+//
+// jobsBase is the prefix up to and including `/v1/jobs` — the local infer proxy
+// and the node bridge expose it at different depths, and both are used.
+func (f *Firer) AwaitJSON(jobsBase, jobID string, deadline time.Duration) ([]byte, error) {
+	stop := time.Now().Add(deadline)
+	wait := 500 * time.Millisecond
+	const maxWait = 3 * time.Second
+
+	for {
+		body, code, err := f.get(jobsBase+"/"+url.PathEscape(jobID), 15*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		if code != http.StatusOK {
+			return nil, fmt.Errorf("job status: HTTP %d", code)
+		}
+		var st struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		if err := json.Unmarshal(body, &st); err != nil {
+			return nil, fmt.Errorf("parse job status: %w", err)
+		}
+		switch st.Status {
+		case "done":
+			out, code, err := f.getLarge(jobsBase+"/"+url.PathEscape(jobID)+"/result", 60*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			if code != http.StatusOK {
+				return nil, fmt.Errorf("job result: HTTP %d", code)
+			}
+			return out, nil
+		case "failed":
+			return nil, fmt.Errorf("job failed: %s", st.Error)
+		}
+		if time.Now().After(stop) {
+			return nil, fmt.Errorf("job did not finish in time")
+		}
+		time.Sleep(wait)
+		if wait < maxWait {
+			wait *= 2
+		}
+	}
+}
+
+// imageResult reads the finished body and returns the image as base64.
+//
+// 🔴 THE STATION SERVES DECODED BYTES, NOT JSON. `/v1/jobs/<id>/result` answers
+// `Content-Type: image/png` with the PNG itself:
+//
+//	89 50 4e 47 0d 0a 1a 0a  …
+//
+// The manifest's `result.content_path: data[0].b64_json` describes how the
+// STATION parses the ENGINE's reply — it is not the shape the station passes on.
+// Reading it as the client contract made every collected image fail with
+// "reply carries no image" 87 seconds after a picture had been drawn correctly.
+//
+// Both shapes are accepted anyway. The station is one hop, and a node reached
+// another way (or a future engine whose station forwards the JSON verbatim) can
+// still answer in the OpenAI shape.
+func (f *Firer) imageResult(base, jobID string) (string, error) {
+	body, code, ctype, err := f.getLargeTyped(base+"/v1/jobs/"+url.PathEscape(jobID)+"/result", 120*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("job result: HTTP %d", code)
+	}
+
+	// Raw image bytes — the normal path. Decided on Content-Type rather than by
+	// sniffing the first bytes, so a truncated or corrupt image reports as
+	// exactly that instead of silently falling through to "no image".
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ctype)), "image/") {
+		if len(body) == 0 {
+			return "", fmt.Errorf("job result: %s with an empty body", ctype)
+		}
+		return base64.StdEncoding.EncodeToString(body), nil
+	}
+
+	// The OpenAI images shape.
+	var oa struct {
+		Data []struct {
+			B64 string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &oa); err == nil && len(oa.Data) > 0 {
+		if s := strings.TrimSpace(oa.Data[0].B64); s != "" {
+			return s, nil
+		}
+	}
+	// No image where one was promised is the node's answer, not a parse
+	// problem to paper over — it is recorded as a failed shot. The content type
+	// goes in the message: without it this said nothing about what DID arrive,
+	// which is the whole question when a picture was drawn and then lost.
+	return "", fmt.Errorf("reply carries no image (content-type %q, %d bytes)", ctype, len(body))
+}
+
+// getLarge is get with the image body limit.
+func (f *Firer) getLarge(endpoint string, timeout time.Duration) ([]byte, int, error) {
+	body, code, _, err := f.getLargeTyped(endpoint, timeout)
+	return body, code, err
+}
+
+// getLargeTyped is getLarge plus the Content-Type header.
+//
+// The type is the only thing that distinguishes a delivered image from a JSON
+// envelope carrying one, and the two arrive on the same endpoint from different
+// hops. Guessing from the bytes would mean a corrupt image reads as "not an
+// image" rather than as a corrupt one.
+func (f *Firer) getLargeTyped(endpoint string, timeout time.Duration) ([]byte, int, string, error) {
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	c := *f.Client
+	c.Timeout = timeout
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	defer resp.Body.Close()
+	ctype := resp.Header.Get("Content-Type")
+	body, err := io.ReadAll(io.LimitReader(resp.Body, imageLimit))
+	if err != nil {
+		return nil, resp.StatusCode, ctype, err
+	}
+	return body, resp.StatusCode, ctype, nil
+}
 
 // get / post issue anonymous requests through isannd. No session header — see
 // the file comment.

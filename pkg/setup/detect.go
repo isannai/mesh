@@ -368,6 +368,19 @@ type ServiceInfo struct {
 	// "owner/repo" / "civitai-id" prefixes that round-trip cleanly via
 	// the search bar (HF text search hits owner/repo paths exactly).
 	ModelOriginURL   string `json:"model_origin_url,omitempty"`
+	// ModelArch is the architecture family, verbatim from the package.json
+	// `architecture` that `isann model pull --arch` wrote: "sd15" / "sdxl" /
+	// "sd3" / "pony" / "flux". Empty for engines with no arch hierarchy —
+	// installer rejects the flag outright for llama/vllm — so an empty value
+	// means "not applicable or unknown", never "SD 1.5".
+	//
+	// 🔴 A PEER CANNOT DERIVE THIS FROM Model. That name is whatever the
+	// operator called the file, and guessing costs the node real work: SDXL
+	// asked for 512x512 returns duplicated subjects and broken anatomy, and
+	// SD 1.5 asked for 1024x1024 does the same in the other direction. The
+	// node then looks wrong for a mistake the caller made. Same reason as
+	// ModelHash — only the host can see the package, so the host says it.
+	ModelArch        string `json:"model_arch,omitempty"`
 	ServerReady      bool   `json:"server_ready,omitempty"`
 	ServerLoading    bool   `json:"server_loading,omitempty"`
 	ChildPID         int    `json:"child_pid,omitempty"`

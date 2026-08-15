@@ -37,6 +37,41 @@ import (
 // appointmentPath is isannd's ungated prober-appointment read.
 const appointmentPath = "/internal/api/cred/prober"
 
+// infoPath reports this node's own identity. Ungated for the same reason the
+// appointment route is, so a background process can read it with no wallet and
+// no session.
+const infoPath = "/internal/api/info"
+
+// SelfNodeID asks isannd which node this is.
+//
+// Used only to keep the prober out of its own target list. A failure returns ""
+// and is not fatal: the cost is one wasted shot at itself, which is worth less
+// than refusing to run because a status endpoint was unreachable.
+func SelfNodeID(isanndURL string, c *http.Client) string {
+	if c == nil {
+		c = &http.Client{Timeout: 10 * time.Second}
+	}
+	resp, err := c.Get(strings.TrimRight(isanndURL, "/") + infoPath)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return ""
+	}
+	var info struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(info.NodeID)
+}
+
 // Appointment is the active prober appointment as isannd holds it.
 type Appointment struct {
 	Alias    string

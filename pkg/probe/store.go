@@ -12,9 +12,8 @@ package probe
 // it summarises drift apart eventually, and when they disagree there is no way
 // to tell which one is lying.
 //
-// The `verdict` column is always NULL for now — scoring is the next milestone.
-// It exists so that landing scoring is an UPDATE rather than a schema migration
-// over rows that are already in the field.
+// The `verdict` column holds pass/fail, written in the same statement as the
+// answer (see CompleteShot). It stays NULL for a shot that never produced one.
 
 import (
 	"database/sql"
@@ -116,6 +115,9 @@ CREATE INDEX IF NOT EXISTS shot_node_day ON shot(node_id, fired_at);
 CREATE INDEX IF NOT EXISTS shot_open     ON shot(outcome, fired_at);
 CREATE INDEX IF NOT EXISTS obs_node      ON observation(node_id, seen_at);
 CREATE INDEX IF NOT EXISTS q_unconsumed  ON question(consumed_at, category);
+-- Backs the duplicate check in AddQuestions. Not UNIQUE: a database that
+-- already holds duplicates from before that check must still open.
+CREATE INDEX IF NOT EXISTS q_text        ON question(category, q);
 `
 
 func (s *Store) migrate() error {
@@ -129,28 +131,57 @@ func (s *Store) migrate() error {
 // questions
 // ---------------------------------------------------------------------------
 
-// AddQuestions appends a generated batch to the queue.
-func (s *Store) AddQuestions(qs []Question, now time.Time) error {
+// AddQuestions appends a generated batch, skipping questions already on record.
+// It returns how many were actually new.
+//
+// 🔴 DUPLICATES ARE THE NORMAL CASE, not an edge case. A model asked twice for
+// capital cities returns France and Japan both times — the well-known ones are
+// a small set and temperature does not change that. Without this check the
+// queue fills with the same twenty questions and the same node gets asked one
+// it has already answered, which is exactly the reuse that consuming a question
+// once is meant to prevent.
+//
+// The check spans CONSUMED rows too, not just the queue: a question asked last
+// week is no fresher than one asked this morning. Consumed rows are pruned on
+// the observation-day horizon, so the space does free up eventually.
+//
+// Matched on (category, q) rather than on the answer — two different questions
+// may share an answer ("What is the capital of France?" and a colour question
+// answered "Paris" would not, but numbers collide constantly in arithmetic).
+func (s *Store) AddQuestions(qs []Question, now time.Time) (int, error) {
 	if len(qs) == 0 {
-		return nil
+		return 0, nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT INTO question(category,q,draft_answer,fewshot,created_at) VALUES(?,?,?,?,?)`)
+	stmt, err := tx.Prepare(`
+		INSERT INTO question(category,q,draft_answer,fewshot,created_at)
+		SELECT ?,?,?,?,?
+		 WHERE NOT EXISTS (SELECT 1 FROM question WHERE category = ? AND q = ?)`)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer stmt.Close()
+
+	added := 0
 	for _, q := range qs {
-		if _, err := stmt.Exec(string(q.Category), q.Q, q.Draft, encodeFewshot(q.Fewshot), now.UnixMilli()); err != nil {
-			return err
+		res, err := stmt.Exec(string(q.Category), q.Q, q.Draft, encodeFewshot(q.Fewshot), now.UnixMilli(),
+			string(q.Category), q.Q)
+		if err != nil {
+			return added, err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			added += int(n)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
 }
 
 // TakeQuestion removes one unconsumed question of the given category from the
@@ -251,11 +282,17 @@ type Shot struct {
 // RecordShot writes the submit half of a shot and returns its row id.
 func (s *Store) RecordShot(sh Shot) (int64, error) {
 	res, err := s.db.Exec(
+		// answer_raw is written at INSERT for the image track, which has no
+		// question row to recover the order from afterwards. CompleteShot
+		// overwrites it with the judged version; a shot that never completes
+		// keeps what was ASKED for, which is the only thing that makes a
+		// timeout diagnosable at all.
 		`INSERT INTO shot(fired_at,node_id,node_addr,slash24,engine,service,model,model_hash,
-		                  job_id,question_id,submit_status,outcome,appointment)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		                  job_id,question_id,submit_status,outcome,appointment,answer_raw)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sh.FiredAt.UnixMilli(), sh.NodeID, sh.NodeAddr, sh.Slash24, sh.Engine, sh.Service,
-		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.Appointment)
+		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.Appointment,
+		sh.AnswerRaw)
 	if err != nil {
 		return 0, err
 	}
@@ -269,12 +306,16 @@ func (s *Store) RecordShot(sh Shot) (int64, error) {
 // late inflates it by however long the prober waited before asking. Kept anyway
 // because it bounds the real value from above, and labelled as observed so a
 // later reader does not mistake it for something the node reported.
+// The verdict is written in the SAME statement as the answer, never by a later
+// pass. A ticket is signed at fire time, so a verdict arriving afterwards has no
+// ticket left to affect (ticket-model.md). The raw answer is stored alongside it
+// so a disputed question stays re-examinable without firing again.
 func (s *Store) CompleteShot(id int64, fetchedAt time.Time, latencyMs int64,
-	promptTokens, completionTokens int, answer, outcome string) error {
+	promptTokens, completionTokens int, answer, outcome, verdict string) error {
 	_, err := s.db.Exec(
 		`UPDATE shot SET fetched_at=?, latency_ms=?, prompt_tokens=?, completion_tokens=?,
-		                 answer_raw=?, outcome=? WHERE id=?`,
-		fetchedAt.UnixMilli(), latencyMs, promptTokens, completionTokens, answer, outcome, id)
+		                 answer_raw=?, outcome=?, verdict=? WHERE id=?`,
+		fetchedAt.UnixMilli(), latencyMs, promptTokens, completionTokens, answer, outcome, verdict, id)
 	return err
 }
 

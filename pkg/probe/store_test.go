@@ -26,7 +26,7 @@ func TestTakeQuestionConsumes(t *testing.T) {
 		{Category: CatMath, Q: "What is 1 + 1?", Draft: "2", Fewshot: mathFewshot},
 		{Category: CatMath, Q: "What is 2 + 2?", Draft: "4", Fewshot: mathFewshot},
 	}
-	if err := s.AddQuestions(qs, now); err != nil {
+	if _, err := s.AddQuestions(qs, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,13 +49,62 @@ func TestTakeQuestionConsumes(t *testing.T) {
 	}
 }
 
+// 🔴 A model asked twice for capital cities returns France both times — the
+// well-known ones are a small set. Without this check the queue fills with
+// repeats and a node gets asked something it has already answered, which is
+// exactly what consuming a question once exists to prevent.
+func TestAddQuestionsSkipsDuplicates(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now()
+
+	batch := []Question{
+		{Category: CatGeography, Q: "What is the capital of France?", Draft: "Paris"},
+		{Category: CatGeography, Q: "What is the capital of Japan?", Draft: "Tokyo"},
+	}
+	if n, err := s.AddQuestions(batch, now); err != nil || n != 2 {
+		t.Fatalf("first batch: added %d, err %v", n, err)
+	}
+
+	// The next batch overlaps, as real ones do.
+	second := []Question{
+		batch[0],
+		{Category: CatGeography, Q: "What is the capital of Italy?", Draft: "Rome"},
+	}
+	n, err := s.AddQuestions(second, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("added %d, want 1 — the repeat should have been dropped", n)
+	}
+	if d, _ := s.QueueDepth(); d[CatGeography] != 3 {
+		t.Fatalf("queue = %d, want 3 distinct questions", d[CatGeography])
+	}
+
+	// 🔴 Consumed questions still count. One asked last week is no fresher than
+	// one asked this morning, so the check must not look only at the queue.
+	if _, _, err := s.TakeQuestion(CatGeography, now); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.AddQuestions(batch, now); err != nil || n != 0 {
+		t.Fatalf("added %d after consuming, want 0 — consumed questions must still block", n)
+	}
+
+	// The same text in a different category is a different question.
+	if n, err := s.AddQuestions([]Question{
+		{Category: CatUnits, Q: "What is the capital of France?", Draft: "blue"},
+	}, now); err != nil || n != 1 {
+		t.Fatalf("added %d across categories, want 1", n)
+	}
+}
+
 func TestQueueDepth(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now()
-	if err := s.AddQuestions([]Question{
+	if _, err := s.AddQuestions([]Question{
 		{Category: CatMath, Q: "a", Draft: "1"},
 		{Category: CatMath, Q: "b", Draft: "2"},
-		{Category: CatColor, Q: "c", Draft: "red"},
+		{Category: CatUnits, Q: "c", Draft: "red"},
 	}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +112,7 @@ func TestQueueDepth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d[CatMath] != 2 || d[CatColor] != 1 {
+	if d[CatMath] != 2 || d[CatUnits] != 1 {
 		t.Fatalf("depth = %+v", d)
 	}
 	if _, _, err := s.TakeQuestion(CatMath, now); err != nil {
@@ -145,7 +194,7 @@ func TestCompleteShot(t *testing.T) {
 		t.Fatalf("pending = %+v", pend)
 	}
 
-	if err := s.CompleteShot(id, now.Add(2*time.Second), 2000, 30, 5, "Paris", OutcomeAnswered); err != nil {
+	if err := s.CompleteShot(id, now.Add(2*time.Second), 2000, 30, 5, "Paris", OutcomeAnswered, VerdictPass); err != nil {
 		t.Fatal(err)
 	}
 	if pend, _ := s.PendingShots(); len(pend) != 0 {
@@ -187,7 +236,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s1.AddQuestions([]Question{{Category: CatMath, Q: "a", Draft: "1"}}, time.Now()); err != nil {
+	if _, err := s1.AddQuestions([]Question{{Category: CatMath, Q: "a", Draft: "1"}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	s1.Close()
