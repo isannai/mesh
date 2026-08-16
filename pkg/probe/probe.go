@@ -58,9 +58,18 @@ type Config struct {
 	// ScheduleHours is the superseded spelling, read only to migrate configs
 	// already in the field. ScheduleSec wins when both are set.
 	ScheduleHours []float64 `json:"schedule_hours,omitempty"`
-	// ResponseDeadline is the base answer allowance in seconds, scaled up for
-	// larger declared models so a bigger machine is not penalised for being one.
-	ResponseDeadline int `json:"response_deadline_sec"`
+	// TextDeadline is the base answer allowance for a TEXT question, in seconds,
+	// scaled up for larger declared models so a bigger machine is not penalised
+	// for being one.
+	//
+	// Named for the track it belongs to, to pair with ImageDeadline. The old
+	// spelling said what it waited FOR while its sibling said what it was ABOUT,
+	// so the two read like unrelated settings when they are the same knob for
+	// the two halves of the prober.
+	TextDeadline int `json:"text_deadline_sec"`
+	// ResponseDeadline is the superseded spelling, read only to migrate configs
+	// already in the field. TextDeadline wins when both are set.
+	ResponseDeadline int `json:"response_deadline_sec,omitempty"`
 	// Generators are the nodes that write geography/animal/colour questions, in
 	// round-robin order. A prober is a small machine and need not host a model
 	// itself, so this is normally an allied node.
@@ -114,6 +123,19 @@ type Config struct {
 	// half a minute. A cap tuned to the fast machine records the slow one as a
 	// timeout, which measures our impatience rather than the node.
 	ImageDeadline int `json:"image_deadline_sec"`
+	// DeferMax is how many rounds an image shot waits for the node's queue to
+	// clear before going out anyway.
+	//
+	// It exists to bound politeness, not to enforce it. Ordering into an empty
+	// queue is what makes the measured time mean something, but a node that is
+	// busy all day is a node with customers — the exact node the faucet is for —
+	// and waiting for it to be idle would exclude it permanently. So the wait
+	// ends. The padded measurement that produces is harmless: queueing can only
+	// make a time slower, and capability is judged on a node's FASTEST shot of
+	// the day, so a padded one loses to its own clean ones.
+	//
+	// 0 or negative means "never defer" — fire on the first attempt every time.
+	DeferMax int `json:"defer_max"`
 	// FireAtSelf lets the prober fire at its OWN node.
 	//
 	// Off by default, and for a reason that is not arbitrary: a prober signs the
@@ -158,10 +180,23 @@ func DefaultConfig() Config {
 		// 1 · 3 · 5 · 8 · 13 hours, written out so the file that ships is the
 		// same shape an operator edits.
 		ScheduleSec:      []float64{3600, 10800, 18000, 28800, 46800},
-		ResponseDeadline: 30,
+		TextDeadline:     30,
 		GeneratorService: "llm-api",
 		ClipService:      "clip-api",
-		ImageDeadline: 300,
+		// 🔴 ZERO means "derive it from the node's own average", which is what
+		// imageDeadline was written to do. It used to be seeded with 300 here,
+		// and that seed made the derivation dead code — the override branch is
+		// checked first, so every node got a flat five minutes however slow it
+		// had told us it was. A 4GB card reporting avg_job_sec 370 timed out on
+		// every shot while drawing every picture correctly.
+		ImageDeadline: 0,
+		// Ten rounds, which at the default one-minute cadence is ten minutes.
+		// Sized against the job, not the clock: one SD picture takes 1.5 to 2.5
+		// minutes, so a handful of rounds is barely one job length and would
+		// give up before a genuinely short queue had drained. Ten covers several
+		// jobs while staying negligible against a schedule whose steps are hours
+		// apart.
+		DeferMax:      10,
 		// 🔴 ImageSizes stays EMPTY by default. Seeding it here overrode the
 		// architecture logic entirely — imageParams checks the config first, so
 		// a default value meant every node got the same list no matter what it
@@ -280,6 +315,14 @@ func LoadConfig(path string) (Config, error) {
 	// mesh runtime is what an operator edits through `isann mesh config`.
 	applyEnvOverrides(&cfg)
 
+	// Absorb the superseded deadline spelling, AFTER the environment so a node
+	// still setting PROBE_RESPONSE_DEADLINE_SEC is carried over too. Dropping
+	// either silently would hand an operator's tuned value back to the default
+	// and make every large model start timing out.
+	if cfg.ResponseDeadline > 0 && cfg.TextDeadline == DefaultConfig().TextDeadline {
+		cfg.TextDeadline = cfg.ResponseDeadline
+	}
+
 	if cfg.NodeBridgeAddr == "" {
 		cfg.NodeBridgeAddr = strings.TrimSpace(os.Getenv("ISANN_NODE_URL"))
 	}
@@ -342,9 +385,11 @@ func applyEnvOverrides(cfg *Config) {
 	for name, dst := range map[string]*int{
 		"PROBE_REFRESH_SEC":           &cfg.RefreshSec,
 		"PROBE_FIRE_INTERVAL_SEC":     &cfg.FireIntervalSec,
-		"PROBE_RESPONSE_DEADLINE_SEC": &cfg.ResponseDeadline,
+		"PROBE_TEXT_DEADLINE_SEC":     &cfg.TextDeadline,
+		"PROBE_RESPONSE_DEADLINE_SEC": &cfg.ResponseDeadline, // superseded; folded in by LoadConfig
 		"PROBE_QUESTION_FANOUT":       &cfg.QuestionFanout,
 		"PROBE_IMAGE_DEADLINE_SEC":    &cfg.ImageDeadline,
+		"PROBE_DEFER_MAX":             &cfg.DeferMax,
 	} {
 		if v := os.Getenv(name); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
@@ -395,12 +440,32 @@ type Prober struct {
 	anchors  map[string]time.Time
 
 	// metrics is the RV's volatile per-service view, refreshed alongside the
-	// directory. Two things read it, and neither can be answered from
-	// /v1/nodes: how long this node actually takes (imageDeadline) and whether
-	// it is mid-job right now (fireImageRound). nil until the first successful
-	// poll, and a failed poll leaves the previous one rather than blanking it —
-	// stale numbers beat no numbers for both decisions.
+	// directory. It answers how long this node typically takes (imageDeadline),
+	// which /v1/nodes cannot. nil until the first successful poll, and a failed
+	// poll leaves the previous one rather than blanking it — stale numbers beat
+	// no numbers for a sizing decision.
+	//
+	// 🔴 It does NOT decide whether a node is busy right now. One SD picture
+	// outlasts the heartbeat interval, so by the time this reads "idle" the
+	// queue has turned over. That reading comes from the node itself, per shot,
+	// in holdBusy.
 	metrics *rvnodes.Metrics
+
+	// deferrals counts consecutive rounds we held off firing at a (node,
+	// service) because its queue was busy. Cleared the moment a shot goes out —
+	// the count then belongs to that shot's row.
+	//
+	// In memory on purpose: it measures how long we have been waiting, and a
+	// prober restart already resets the uptime anchors it waits alongside.
+	// Persisting one without the other would be the inconsistent half.
+	deferrals map[string]int
+	deferMax  int
+
+	// openShots is the (node, service) set with a picture still on order, so a
+	// second is never sent on top of it. Rebuilt each round from the database
+	// rather than tracked incrementally: the database is the record, and a
+	// prober that restarted mid-flight has to see the shots it left behind.
+	openShots map[string]bool
 
 	// refilling guards the background question generator so only one round
 	// runs at a time. Atomic because Refresh (one goroutine) starts it and the
@@ -454,9 +519,19 @@ func (s *roundStats) String() string {
 	return b.String()
 }
 
-// record folds one shot's outcome into the tally.
+// record folds one shot's outcome into the tally: fired here and settled here.
 func (s *roundStats) record(outcome, verdict string) {
 	s.fired.Add(1)
+	s.settle(outcome, verdict)
+}
+
+// settle folds in an outcome for a shot fired in an EARLIER round.
+//
+// 🔴 It must not touch the fired count. An image shot is counted when it goes
+// out and settled whenever its picture turns up, which is usually a different
+// round — adding to `fired` here would count that one shot twice and make the
+// daily tally drift upward all day.
+func (s *roundStats) settle(outcome, verdict string) {
 	switch outcome {
 	case OutcomeAnswered:
 		s.answered.Add(1)
@@ -503,6 +578,9 @@ func New(cfg Config) (*Prober, error) {
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		schedule:  parseScheduleSec(cfg.Schedule()),
 		anchors:   map[string]time.Time{},
+		deferrals: map[string]int{},
+		deferMax:  cfg.DeferMax,
+		openShots: map[string]bool{},
 		// Asked once at construction. isannd's /info is ungated for the same
 		// reason the appointment route is, so this needs no wallet; if it fails
 		// the set is simply smaller and the prober may waste a shot on itself.
@@ -782,10 +860,29 @@ func (p *Prober) prune(now time.Time) {
 // question supply affordable: 50,000 shots a day would need 50,000 questions
 // one-per-shot, but a few thousand this way.
 func (p *Prober) FireRound() {
+	now := time.Now()
+
+	// One line per round, so a working prober is not silent. Declared up here
+	// because every stage reports into it — collection included, which is why a
+	// round can show more answers than it fired shots.
+	var stats roundStats
+
+	// 🔴 COLLECTION RUNS FIRST AND IS NOT GATED. A picture already ordered has
+	// to be fetched whether or not we may fire again: the appointment could
+	// have expired, the directory could have come back empty, and neither
+	// changes the fact that a node drew something for us and the station will
+	// drop it after DoneTTL. Gating this behind the fire checks would strand
+	// those rows open forever — and an open row keeps its node ineligible.
+	p.collectRound(now, &stats)
+	defer func() {
+		if stats.fired.Load() > 0 || stats.answered.Load() > 0 {
+			log.Printf("[probe] round: %s", &stats)
+		}
+	}()
+
 	if !p.hasAppt || (len(p.targets) == 0 && len(p.imgTargets) == 0) {
 		return
 	}
-	now := time.Now()
 	if !p.appt.Active(now) {
 		return
 	}
@@ -795,12 +892,10 @@ func (p *Prober) FireRound() {
 		log.Printf("[probe] shot counts: %v", err)
 		return
 	}
+
 	// No random draw and no budget: a node is here because it EARNED the shot
 	// by staying up past the next threshold. Load spreads on its own, since
 	// nodes anchor at whatever time they happened to connect.
-	// One line per round, so a working prober is not silent. Declared up here
-	// because BOTH tracks report into it.
-	var stats roundStats
 
 	// 🔴 The two tracks are independent. An earlier version returned here when
 	// no text node was due, which silently took the image round with it — a
@@ -813,11 +908,67 @@ func (p *Prober) FireRound() {
 	}
 
 	p.fireImageRound(now, counts, &stats)
+}
 
-	if stats.fired.Load() > 0 {
-		log.Printf("[probe] round: %s", &stats)
+// collectRound asks after every picture still on order and rebuilds the open set.
+//
+// 🔴 THE OPEN SET IS REBUILT FROM THE DATABASE, not carried in memory. A prober
+// that restarted mid-flight has orders outstanding it knows nothing about, and
+// an in-memory set would let it fire again on top of them — the queue growth
+// this whole arrangement exists to stop. The database is the record.
+//
+// Failures are per shot. One node being unreachable must not stop the others
+// from being collected.
+func (p *Prober) collectRound(now time.Time, stats *roundStats) {
+	open, err := p.store.PendingShots()
+	if err != nil {
+		// 🔴 Fail CLOSED for firing: without the list we cannot tell which nodes
+		// already have a picture on order, and firing blind is what stacks jobs
+		// on a slow node. The previous set stands for this round.
+		log.Printf("[probe] pending shots: %v — not firing at image nodes this round", err)
+		return
 	}
-	return
+
+	var images []Shot
+	for _, sh := range open {
+		if sh.QuestionID != 0 {
+			// A text shot. Those are collected inline in the same round they are
+			// fired; one left open here is the residue of a restart or a crash,
+			// and its answer is long gone from the station.
+			if e := p.store.FailShot(sh.ID, now, OutcomeSkipped); e != nil {
+				log.Printf("[probe] close orphaned text shot: %v", e)
+			}
+			continue
+		}
+		images = append(images, sh)
+	}
+
+	// 🔴 CONCURRENT, because one unreachable node must not spend the round. Each
+	// peek carries a 15s timeout, so a handful of dead nodes collected in series
+	// would outlast the firing interval and the next round would be skipped
+	// outright — the prober would go quiet for a reason nothing reports.
+	var (
+		mu   sync.Mutex
+		next = map[string]bool{}
+		wg   sync.WaitGroup
+		sem  = make(chan struct{}, maxConcurrentImages)
+	)
+	for _, sh := range images {
+		wg.Add(1)
+		go func(sh Shot) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if p.collectImageShot(sh, now, stats) {
+				return // settled, one way or another
+			}
+			mu.Lock()
+			next[shotKey(sh.NodeID, sh.Service)] = true
+			mu.Unlock()
+		}(sh)
+	}
+	wg.Wait()
+	p.openShots = next
 }
 
 // fireTextGroups runs the text half of a round.
@@ -1035,7 +1186,7 @@ func trim(s string) string {
 // A fixed cap would penalise a node for running a bigger model, which is the
 // opposite of what the probe is meant to reward.
 func (p *Prober) deadlineFor(t Target) time.Duration {
-	base := time.Duration(p.cfg.ResponseDeadline) * time.Second
+	base := time.Duration(p.cfg.TextDeadline) * time.Second
 	m := strings.ToLower(t.Service.Model)
 	switch {
 	case strings.Contains(m, "70b"), strings.Contains(m, "72b"):

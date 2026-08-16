@@ -46,11 +46,12 @@ type ServiceMetric struct {
 	RunningJobID  string  `json:"running_job_id,omitempty"`
 }
 
-// Busy reports whether the node is working on something for this service.
-//
-// Queued counts as busy: a job we add now waits behind whatever is in front of
-// it, so the wait we would measure is the queue's, not the node's.
-func (m ServiceMetric) Busy() bool { return m.RunningCount > 0 || m.QueueDepth > 0 }
+// There is deliberately no Busy() here any more. These numbers come from the
+// RV's heartbeat, and one image job outlasts the heartbeat interval — by the
+// time this snapshot reads "idle" the node's queue has turned over completely.
+// "Is it busy right now" is asked of the node itself, per shot, over the P2P
+// path (probe.Firer.QueueStats). What this poll is still good for is sizing:
+// AvgJobSec says how long that node's work usually takes.
 
 // Metrics is a lookup over one /v1/metrics poll.
 type Metrics struct {

@@ -11,7 +11,9 @@
     46800
   ],
 
-  "response_deadline_sec": 30,
+  "text_deadline_sec": 30,
+  "image_deadline_sec": 0,
+  "defer_max": 10,
 
   "generators": [
     "this"

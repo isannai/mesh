@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -35,6 +36,17 @@ const (
 	OutcomeQueueFull = "queue_full" // 429 — the node is working, just busy
 	OutcomeRefused   = "refused"    // rejected or unreachable
 	OutcomeTimeout   = "timeout"    // accepted but never finished in time
+
+	// OutcomeSkipped is OUR failure, not the node's: the prober restarted mid
+	// flight, a collection call faulted, the station's result retention expired
+	// before we came back for it.
+	//
+	// 🔴 Every one of those used to land as `refused` or `timeout` — a mark
+	// against a node that had done nothing wrong and had usually drawn the
+	// picture correctly. Once tickets hang off this history that mark becomes a
+	// missing payment, so the distinction has to live in the data and not only
+	// in a log line. Scoring ignores these rows.
+	OutcomeSkipped = "skipped"
 )
 
 // Store is the prober's SQLite database.
@@ -98,7 +110,9 @@ CREATE TABLE IF NOT EXISTS shot (
   answer_raw        TEXT,
   outcome           TEXT    NOT NULL,
   verdict           TEXT,
-  appointment       TEXT
+  appointment       TEXT,
+  deferred          INTEGER, -- rounds we held off before firing this one
+  order_json        TEXT     -- image orders only: the checks a later round judges against
 );
 
 CREATE TABLE IF NOT EXISTS observation (
@@ -120,9 +134,26 @@ CREATE INDEX IF NOT EXISTS q_unconsumed  ON question(consumed_at, category);
 CREATE INDEX IF NOT EXISTS q_text        ON question(category, q);
 `
 
+// addedColumns are columns that arrived after the first release. CREATE TABLE
+// IF NOT EXISTS does nothing to a table that already exists, so a database made
+// before them would silently keep the old shape and every INSERT naming a new
+// column would fail — on an operator's node, with a week of history in it.
+//
+// ALTER TABLE ADD COLUMN is the whole migration. Re-running it errors with
+// "duplicate column name", which is the success case on the second open, so the
+// error is swallowed rather than checked: SQLite has no ADD COLUMN IF NOT
+// EXISTS, and matching on the message text would break with a driver update.
+var addedColumns = []string{
+	`ALTER TABLE shot ADD COLUMN deferred INTEGER`,
+	`ALTER TABLE shot ADD COLUMN order_json TEXT`,
+}
+
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("probe db schema: %w", err)
+	}
+	for _, stmt := range addedColumns {
+		_, _ = s.db.Exec(stmt)
 	}
 	return nil
 }
@@ -277,6 +308,18 @@ type Shot struct {
 	AnswerRaw        string
 	Outcome          string
 	Appointment      string
+
+	// Deferred is how many rounds we held off before firing this shot because
+	// the node's queue was not empty. Read it next to LatencyMs: a fast time
+	// with a high count is a busy node that happens to be quick, while a slow
+	// time at zero is a node that was idle and still took that long.
+	Deferred int
+
+	// OrderJSON carries the image order (prompt + checks) so a LATER round can
+	// judge a picture this one only ordered. The order lived in memory when
+	// collection happened inline; it has to outlive the round now, and it has
+	// to survive a prober restart or the shot can never be judged at all.
+	OrderJSON string
 }
 
 // RecordShot writes the submit half of a shot and returns its row id.
@@ -288,11 +331,12 @@ func (s *Store) RecordShot(sh Shot) (int64, error) {
 		// keeps what was ASKED for, which is the only thing that makes a
 		// timeout diagnosable at all.
 		`INSERT INTO shot(fired_at,node_id,node_addr,slash24,engine,service,model,model_hash,
-		                  job_id,question_id,submit_status,outcome,appointment,answer_raw)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		                  job_id,question_id,submit_status,outcome,appointment,answer_raw,
+		                  deferred,order_json)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sh.FiredAt.UnixMilli(), sh.NodeID, sh.NodeAddr, sh.Slash24, sh.Engine, sh.Service,
 		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.Appointment,
-		sh.AnswerRaw)
+		sh.AnswerRaw, sh.Deferred, sh.OrderJSON)
 	if err != nil {
 		return 0, err
 	}
@@ -360,11 +404,22 @@ func (s *Store) ShotCountsToday(dayStart time.Time) (map[string]int, error) {
 	return out, rows.Err()
 }
 
-// PendingShots lists shots that were accepted but whose result was never
-// retrieved — the prober's own restart leaves these behind.
+// PendingShots lists shots that were accepted but whose result is not in hand
+// yet — the ones a later round comes back for.
+//
+// 🔴 NOT FILTERED BY DAY. A shot fired at 23:58 is collected after midnight, and
+// cutting the query at the day boundary would strand it as an eternal open row
+// that also blocks its node from ever being fired at again. The daily cap reads
+// fired_at separately (ShotCountsToday), so yesterday's collection cannot leak
+// into today's count.
+//
+// Ordered oldest first: those are the ones closest to the station's retention
+// limit, so they are the ones worth asking about while the answer still exists.
 func (s *Store) PendingShots() ([]Shot, error) {
 	rows, err := s.db.Query(
-		`SELECT id,fired_at,node_id,node_addr,job_id,service,model FROM shot
+		`SELECT id,fired_at,node_id,node_addr,job_id,service,model,
+		        COALESCE(question_id,0), COALESCE(order_json,''), COALESCE(answer_raw,'')
+		   FROM shot
 		  WHERE outcome=? AND job_id<>'' ORDER BY fired_at`, OutcomeSubmitted)
 	if err != nil {
 		return nil, err
@@ -374,13 +429,56 @@ func (s *Store) PendingShots() ([]Shot, error) {
 	for rows.Next() {
 		var sh Shot
 		var firedMs int64
-		if err := rows.Scan(&sh.ID, &firedMs, &sh.NodeID, &sh.NodeAddr, &sh.JobID, &sh.Service, &sh.Model); err != nil {
+		if err := rows.Scan(&sh.ID, &firedMs, &sh.NodeID, &sh.NodeAddr, &sh.JobID, &sh.Service,
+			&sh.Model, &sh.QuestionID, &sh.OrderJSON, &sh.AnswerRaw); err != nil {
 			return nil, err
 		}
 		sh.FiredAt = time.UnixMilli(firedMs)
 		out = append(out, sh)
 	}
 	return out, rows.Err()
+}
+
+// DailyBestMs returns each node's FASTEST answered shot of the day, per service.
+//
+// 🔴 The fastest, not the average, and that is the whole point. Capability is
+// "this node CAN produce in N seconds", which one clean shot proves; a queue
+// behind the other four inflates their times without saying anything about the
+// hardware. Since a measurement can be inflated by waiting but never deflated,
+// the minimum is the tightest honest bound on what the node can do — and a node
+// with no GPU cannot fake its way under it however many shots it gets.
+//
+// Only `answered` rows count. A skipped row is our failure and a refused one
+// never ran, so neither is evidence either way.
+func (s *Store) DailyBestMs(dayStart time.Time) (map[string]int64, error) {
+	rows, err := s.db.Query(
+		`SELECT node_id, service, MIN(latency_ms) FROM shot
+		  WHERE fired_at>=? AND outcome=? AND latency_ms>0
+		  GROUP BY node_id, service`, dayStart.UnixMilli(), OutcomeAnswered)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var node, service string
+		var ms int64
+		if err := rows.Scan(&node, &service, &ms); err != nil {
+			return nil, err
+		}
+		out[shotKey(node, service)] = ms
+	}
+	return out, rows.Err()
+}
+
+// shotKey is the (node, service) map key.
+//
+// Lowercased because node ids arrive in mixed case — the RV echoes the
+// checksummed EOA on some rows and the lowercase form on others, in the same
+// response. A case-sensitive key silently misses half of them, and the symptom
+// is nothing at all: the lookup just never finds a match.
+func shotKey(nodeID, service string) string {
+	return strings.ToLower(strings.TrimSpace(nodeID)) + "|" + strings.ToLower(strings.TrimSpace(service))
 }
 
 // ---------------------------------------------------------------------------

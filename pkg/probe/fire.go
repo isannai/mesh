@@ -379,51 +379,92 @@ const answerLimit = 512
 // acceptable allocation. 8MB leaves an order of magnitude over a 512² PNG.
 const imageLimit = 8 << 20
 
-// CollectImage polls an image job and returns the generated image as base64.
-//
-// The string is passed straight to the validator without decoding: the engine
-// produces base64 (sd manifest result.content_path = data[0].b64_json) and CLIP
-// accepts base64, so decoding it here would only be a chance to corrupt it.
-func (f *Firer) CollectImage(nodeID, jobID string, deadline time.Duration) (string, error) {
-	base := f.nodeBase(nodeID)
-	stop := time.Now().Add(deadline)
+// errJobPending says the node accepted the job and has not finished it. It is
+// not a failure and the caller must not record one: the shot stays open and the
+// next round asks again.
+var errJobPending = fmt.Errorf("job not finished yet")
 
-	wait := time.Second
-	const maxWait = 5 * time.Second
-	for {
-		body, code, err := f.get(base+"/v1/jobs/"+url.PathEscape(jobID), 15*time.Second)
-		if err != nil {
-			return "", err
-		}
-		if code != http.StatusOK {
-			return "", fmt.Errorf("job status: HTTP %d", code)
-		}
-		var st struct {
-			Status string `json:"status"`
-			Error  string `json:"error"`
-		}
-		if err := json.Unmarshal(body, &st); err != nil {
-			return "", fmt.Errorf("parse job status: %w", err)
-		}
-		switch st.Status {
-		case "done":
-			return f.imageResult(base, jobID)
-		case "failed":
-			return "", fmt.Errorf("job failed: %s", st.Error)
-		}
-		if time.Now().After(stop) {
-			return "", errImageTimeout
-		}
-		time.Sleep(wait)
-		if wait < maxWait {
-			wait *= 2
-		}
+// PeekImage asks ONCE whether an image job is done, and returns the picture as
+// base64 if it is.
+//
+// 🔴 IT DOES NOT WAIT. Waiting here is what made a busy node look like a broken
+// one: the round blocked for the whole deadline, gave up, recorded a failure,
+// and the node finished the picture seconds later with nobody to hand it to. A
+// 4GB card spent hours in that loop — every shot a timeout, every picture drawn
+// correctly, every one discarded. Now the round moves on and the NEXT one picks
+// the answer up, so the only thing a slow node costs us is patience.
+//
+// errJobPending means "ask again later" and is the ordinary case, not an error
+// worth logging.
+//
+// The base64 string goes to the validator undecoded: the engine produces base64
+// and CLIP accepts base64, so decoding here would only be a chance to corrupt it.
+func (f *Firer) PeekImage(nodeID, jobID string) (string, error) {
+	base := f.nodeBase(nodeID)
+	body, code, err := f.get(base+"/v1/jobs/"+url.PathEscape(jobID), 15*time.Second)
+	if err != nil {
+		return "", err
 	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("job status: HTTP %d", code)
+	}
+	var st struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &st); err != nil {
+		return "", fmt.Errorf("parse job status: %w", err)
+	}
+	switch st.Status {
+	case "done":
+		return f.imageResult(base, jobID)
+	case "failed":
+		return "", fmt.Errorf("job failed: %s", st.Error)
+	}
+	return "", errJobPending
 }
 
-// errImageTimeout separates "the node never finished" from a transport fault,
-// so the caller can record OutcomeTimeout rather than a refusal.
-var errImageTimeout = fmt.Errorf("image job did not finish in time")
+// QueueStats is the station's own view of one service's queue.
+//
+// pending and running are kept apart deliberately. A job we add now waits behind
+// both, but they answer different questions: `pending 0 / running 1` is a node
+// mid-picture that will free up, while `pending 1 / running 0` has not even
+// started the one in front of us. The combined queue_depth other endpoints
+// report cannot tell those apart.
+type QueueStats struct {
+	Pending          int     `json:"pending"`
+	Running          int     `json:"running"`
+	EstimatedWaitSec int     `json:"estimated_wait_sec"`
+	AvgJobSec        float64 `json:"avg_job_sec"`
+}
+
+// Idle reports whether a shot fired now would start immediately.
+func (q QueueStats) Idle() bool { return q.Pending == 0 && q.Running == 0 }
+
+// QueueStats reads a node's live queue over the same P2P path everything else
+// uses. isannd's isInferencePeerPath already covers /v1/queue, so the request
+// carries the caller signature without any special handling here.
+//
+// 🔴 The RV's /v1/metrics carries the same numbers and must NOT be used for
+// this. It is a heartbeat snapshot, and one SD picture takes longer than the
+// heartbeat interval — by the time a stale gauge says "idle" the queue has
+// turned over completely. A gauge that is wrong exactly when it matters is
+// worse than no gauge, because it reads as certainty.
+func (f *Firer) QueueStats(nodeID, service string) (QueueStats, error) {
+	endpoint := f.nodeBase(nodeID) + "/v1/queue/stats?service=" + url.QueryEscape(service)
+	body, code, err := f.get(endpoint, 15*time.Second)
+	if err != nil {
+		return QueueStats{}, err
+	}
+	if code != http.StatusOK {
+		return QueueStats{}, fmt.Errorf("queue stats: HTTP %d", code)
+	}
+	var qs QueueStats
+	if err := json.Unmarshal(body, &qs); err != nil {
+		return QueueStats{}, fmt.Errorf("parse queue stats: %w", err)
+	}
+	return qs, nil
+}
 
 // AwaitJSON polls a job to completion and returns its result body verbatim.
 //

@@ -16,6 +16,7 @@ package probe
 // nothing left to affect.
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -113,6 +114,32 @@ func (p *Prober) imageParams(arch, model string) []string {
 	return sdSizes
 }
 
+// imageRetention is the hard ceiling on waiting for a picture.
+//
+// It is the station's number, not ours: a finished job is held for DoneTTL
+// (default 1h) or until MaxDone newer jobs push it out. Past that the answer no
+// longer exists to be fetched, so no policy of ours can justify waiting longer.
+const imageRetention = time.Hour
+
+// giveUpAfter is how long an ordered picture may stay outstanding.
+//
+// 🔴 THIS IS NOT THE OLD DEADLINE. That one measured how long we would BLOCK
+// waiting, and expiring it recorded a failure against a node that was drawing
+// correctly. Nothing blocks now, so the only thing this bounds is how long one
+// node stays ineligible: an open shot stops that node being fired at again, so
+// a job that will never finish would otherwise cost it the rest of the day.
+//
+// Generous by design, and derived from the node's own average, because being
+// wrong in this direction costs one delayed shot while being wrong in the other
+// records a timeout for a picture that was on its way.
+func (p *Prober) giveUpAfter(nodeID, service string) time.Duration {
+	d := p.imageDeadline(nodeID, service)
+	if d > imageRetention {
+		return imageRetention
+	}
+	return d
+}
+
 // Deadline bounds. The floor applies when the node has told us nothing yet; the
 // ceiling is where we stop calling a node probe-able at all.
 const (
@@ -208,8 +235,9 @@ func (p *Prober) imageRun(o ImageOrder, svc rvnodes.Service, rng *rand.Rand) map
 	}
 }
 
-// fireImageOne orders one picture, collects it and has it judged.
-func (p *Prober) fireImageOne(t Target, o ImageOrder, stats *roundStats) {
+// fireImageOne orders one picture and writes the order down. It does NOT wait
+// for the picture — collectImageShot does that, in a later round.
+func (p *Prober) fireImageOne(t Target, o ImageOrder, deferred int, stats *roundStats) {
 	now := time.Now()
 	sh := Shot{
 		FiredAt:     now,
@@ -221,6 +249,7 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, stats *roundStats) {
 		Model:       t.Service.Model,
 		ModelHash:   t.Service.ModelHash,
 		Appointment: p.appt.Token,
+		Deferred:    deferred,
 	}
 
 	run := p.imageRun(o, t.Service, p.rng)
@@ -230,6 +259,10 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, stats *roundStats) {
 	// no way to answer "what did we ask it to draw". That is the exact question
 	// a timeout raises, and the record had thrown the answer away.
 	sh.AnswerRaw = imageAsk(o, run)
+	// The checks go with it. Judging happens in a later round now, possibly
+	// after a restart, and an order that only lived in memory could never be
+	// scored — the picture would arrive with nothing to compare it against.
+	sh.OrderJSON = encodeOrder(o)
 
 	res, err := p.firer.SubmitRun(t.Node.ID, t.Service.Name, run)
 	sh.JobID = res.JobID
@@ -238,8 +271,7 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, stats *roundStats) {
 	if sh.Outcome == "" {
 		sh.Outcome = OutcomeRefused
 	}
-	id, serr := p.store.RecordShot(sh)
-	if serr != nil {
+	if _, serr := p.store.RecordShot(sh); serr != nil {
 		log.Printf("[probe] record image shot: %v", serr)
 		return
 	}
@@ -250,21 +282,59 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, stats *roundStats) {
 		}
 		return
 	}
+	// Counted as fired, not as answered. The verdict lands in whichever round
+	// collects it, which is why a round's tally can show more answers than it
+	// fired shots.
+	stats.fired.Add(1)
+}
 
-	img, err := p.firer.CollectImage(t.Node.ID, res.JobID, p.imageDeadline(t.Node.ID, t.Service.Name))
-	end := time.Now()
-	if err != nil {
-		outcome := OutcomeRefused
-		if err == errImageTimeout {
-			outcome = OutcomeTimeout
+// collectImageShot asks once whether an ordered picture is ready, and judges it
+// if so. Returns false when the shot is still open and should be asked again.
+func (p *Prober) collectImageShot(sh Shot, now time.Time, stats *roundStats) bool {
+	img, err := p.firer.PeekImage(sh.NodeID, sh.JobID)
+	if err == errJobPending {
+		// 🔴 The ordinary case. Not logged, not recorded, not a mark against
+		// anyone: the node is still drawing.
+		if now.Sub(sh.FiredAt) > p.giveUpAfter(sh.NodeID, sh.Service) {
+			// The node accepted the job and never finished it. This one IS the
+			// node's — waiting longer would not produce an answer, and the open
+			// shot is meanwhile blocking every further shot at that node.
+			if e := p.store.FailShot(sh.ID, now, OutcomeTimeout); e != nil {
+				log.Printf("[probe] fail image shot: %v", e)
+			}
+			stats.settle(OutcomeTimeout, "")
+			log.Printf("[probe] %s image: no result after %s — giving up",
+				short(sh.NodeID), now.Sub(sh.FiredAt).Round(time.Second))
+			return true
 		}
-		if e := p.store.FailShot(id, end, outcome); e != nil {
+		return false
+	}
+	if err != nil {
+		// 🔴 A transport fault is OURS, not the node's. It drew the picture or
+		// it did not; we could not ask. Recording a refusal here is what put
+		// marks on nodes that had done nothing wrong.
+		if e := p.store.FailShot(sh.ID, now, OutcomeSkipped); e != nil {
 			log.Printf("[probe] fail image shot: %v", e)
 		}
-		stats.record(outcome, "")
-		log.Printf("[probe] %s image: %v", short(t.Node.ID), err)
-		return
+		stats.settle(OutcomeSkipped, "")
+		log.Printf("[probe] %s image: could not collect: %v", short(sh.NodeID), err)
+		return true
 	}
+
+	o, ok := decodeOrder(sh.OrderJSON)
+	if !ok {
+		// Ordered by a build that did not write the checks down, or the row is
+		// corrupt. The picture is here and it may well be correct; we simply
+		// have nothing to judge it against. Not the node's fault.
+		if e := p.store.CompleteShot(sh.ID, now, now.Sub(sh.FiredAt).Milliseconds(), 0, 0,
+			sh.AnswerRaw+" | no order on record", OutcomeSkipped, ""); e != nil {
+			log.Printf("[probe] complete image shot: %v", e)
+		}
+		stats.settle(OutcomeSkipped, "")
+		return true
+	}
+
+	latency := now.Sub(sh.FiredAt).Milliseconds()
 
 	// 🔴 A judging failure is NOT the node's failure. The picture arrived; we
 	// could not get it judged. Recording that as a fail would penalise a node
@@ -272,27 +342,48 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, stats *roundStats) {
 	// verdict and simply does not count toward anything.
 	j, jerr := p.validator.Validate(img, o.Checks)
 	if jerr != nil {
-		if e := p.store.CompleteShot(id, end, end.Sub(now).Milliseconds(), 0, 0,
+		if e := p.store.CompleteShot(sh.ID, now, latency, 0, 0,
 			imageNote(o, nil), OutcomeAnswered, ""); e != nil {
 			log.Printf("[probe] complete image shot: %v", e)
 		}
-		stats.record(OutcomeAnswered, "")
-		log.Printf("[probe] %s image: not judged: %v", short(t.Node.ID), jerr)
-		return
+		stats.settle(OutcomeAnswered, "")
+		log.Printf("[probe] %s image: not judged: %v", short(sh.NodeID), jerr)
+		return true
 	}
 
 	verdict := VerdictFail
 	if j.RequiredPass() {
 		verdict = VerdictPass
 	}
-	if e := p.store.CompleteShot(id, end, end.Sub(now).Milliseconds(), 0, 0,
+	if e := p.store.CompleteShot(sh.ID, now, latency, 0, 0,
 		imageNote(o, &j), OutcomeAnswered, verdict); e != nil {
 		log.Printf("[probe] complete image shot: %v", e)
 	}
-	stats.record(OutcomeAnswered, verdict)
+	stats.settle(OutcomeAnswered, verdict)
 	if verdict == VerdictFail {
-		log.Printf("[probe] %s image failed: %s", short(t.Node.ID), failedChecks(j))
+		log.Printf("[probe] %s image failed: %s", short(sh.NodeID), failedChecks(j))
 	}
+	return true
+}
+
+// encodeOrder / decodeOrder persist an image order across rounds.
+func encodeOrder(o ImageOrder) string {
+	b, err := json.Marshal(o)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func decodeOrder(s string) (ImageOrder, bool) {
+	if strings.TrimSpace(s) == "" {
+		return ImageOrder{}, false
+	}
+	var o ImageOrder
+	if err := json.Unmarshal([]byte(s), &o); err != nil || len(o.Checks) == 0 {
+		return ImageOrder{}, false
+	}
+	return o, true
 }
 
 // imageAsk renders what was ASKED for, stored at fire time.
@@ -356,29 +447,68 @@ func failedChecks(j Judgement) string {
 	return strings.Join(bad, ", ")
 }
 
-// dropBusy removes targets that are already working on something.
+// holdBusy decides, per target, whether to order a picture now or wait a round.
 //
-// 🔴 THE DEADLINE EXPIRING DOES NOT STOP THE NODE. When a shot times out we walk
-// away, but the node keeps drawing — it has no idea we gave up. Firing again
-// immediately puts the next order in a queue behind work we are no longer
-// waiting for, so it times out too, and so does the one after that. A 4GB card
-// spent hours in that loop: every shot a timeout, every picture drawn correctly,
-// every one discarded, and the queue only ever growing.
+// WHY WAIT AT ALL. What the image track measures is how fast a node can draw,
+// and the only clock we have is our own: submit to result in hand. That number
+// is honest when the job starts immediately and inflated by however much was
+// queued ahead of it. Ordering into an empty queue is what makes the measurement
+// mean something.
 //
-// The node reports the state that settles it. queue_depth and running_count come
-// from the station's own queue, so this is not an inference.
+// 🔴 WHY NOT WAIT FOREVER. A node that is busy all day is a node with customers,
+// which is exactly what the faucet exists to reward. "Only fire at an idle
+// queue" excludes it permanently, and no amount of tuning fixes that — so after
+// deferMax rounds we fire regardless. The inflated time that produces is safe:
+// waiting can only make a measurement slower, never faster, so a padded shot
+// loses to that node's own clean ones and never manufactures a pass.
 //
-// A node the RV knows nothing about is fired at. Unknown must not mean blocked,
-// or one metrics hiccup would silently stop the whole image track.
-func (p *Prober) dropBusy(due []Target) []Target {
+// The count rides along to the shot row. Read next to the latency it explains
+// whether a slow time means "no GPU" or "GPU, but working".
+//
+// Unknown does not mean blocked: when the queue cannot be read at all we fire.
+// One faulted request must not silently stop the whole image track.
+func (p *Prober) holdBusy(due []Target) []Target {
+	// The queue reads go out together. In series a single unreachable node would
+	// hold the round for its whole 15s timeout, and a few of them would outlast
+	// the firing interval entirely. The decisions below stay sequential so the
+	// deferral map needs no lock and the kept order is stable.
+	type probe struct {
+		qs  QueueStats
+		err error
+	}
+	probes := make([]probe, len(due))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentImages)
+	for i, t := range due {
+		wg.Add(1)
+		go func(i int, t Target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			probes[i].qs, probes[i].err = p.firer.QueueStats(t.Node.ID, t.Service.Name)
+		}(i, t)
+	}
+	wg.Wait()
+
 	out := due[:0:0]
-	for _, t := range due {
-		m, ok := p.metrics.Get(t.Node.ID, t.Service.Name)
-		if ok && m.Busy() {
+	for i, t := range due {
+		key := shotKey(t.Node.ID, t.Service.Name)
+		qs, err := probes[i].qs, probes[i].err
+		switch {
+		case err != nil:
+			log.Printf("[probe] %s %s: queue unreadable (%v) — firing anyway",
+				short(t.Node.ID), t.Service.Name, err)
+		case qs.Idle():
+			// Nothing in front of us: the clean case this whole dance is for.
+		case p.deferrals[key] >= p.deferMax:
+			log.Printf("[probe] %s %s busy (running %d, pending %d) — deferred %d times, firing anyway",
+				short(t.Node.ID), t.Service.Name, qs.Running, qs.Pending, p.deferrals[key])
+		default:
 			// Said out loud. A silent skip is indistinguishable from a broken
 			// schedule, and "why is it not firing" has already cost an evening.
-			log.Printf("[probe] %s %s busy (running %d, queued %d) — skipping this round",
-				short(t.Node.ID), t.Service.Name, m.RunningCount, m.QueueDepth)
+			p.deferrals[key]++
+			log.Printf("[probe] %s %s busy (running %d, pending %d) — deferring (%d/%d)",
+				short(t.Node.ID), t.Service.Name, qs.Running, qs.Pending, p.deferrals[key], p.deferMax)
 			continue
 		}
 		out = append(out, t)
@@ -401,10 +531,14 @@ func (p *Prober) fireImageRound(now time.Time, shotsToday map[string]int, stats 
 		return
 	}
 	due := dueTargets(p.imgTargets, p.anchors, shotsToday, p.schedule, now)
+	// A node whose last picture is still on order is not fired at again. That is
+	// what keeps a slow node's queue from growing under us — the failure mode
+	// the old blocking collect produced, one abandoned job at a time.
+	due = dropOpen(due, p.openShots)
 	if len(due) == 0 {
 		return
 	}
-	due = p.dropBusy(due)
+	due = p.holdBusy(due)
 	if len(due) == 0 {
 		return
 	}
@@ -417,15 +551,30 @@ func (p *Prober) fireImageRound(now time.Time, shotsToday map[string]int, stats 
 			log.Printf("[probe] slot table too small to draw an image order")
 			return
 		}
+		key := shotKey(t.Node.ID, t.Service.Name)
+		deferred := p.deferrals[key]
+		delete(p.deferrals, key) // the wait is over; the count belongs to the shot now
 		wg.Add(1)
-		go func(t Target, o ImageOrder) {
+		go func(t Target, o ImageOrder, deferred int) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			p.fireImageOne(t, o, stats)
-		}(t, o)
+			p.fireImageOne(t, o, deferred, stats)
+		}(t, o, deferred)
 	}
 	wg.Wait()
+}
+
+// dropOpen removes targets that already have a shot waiting to be collected.
+func dropOpen(due []Target, open map[string]bool) []Target {
+	out := due[:0:0]
+	for _, t := range due {
+		if open[shotKey(t.Node.ID, t.Service.Name)] {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // maxConcurrentImages is low on purpose. Each shot holds a ~500KB image in

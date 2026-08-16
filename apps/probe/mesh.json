@@ -16,7 +16,8 @@
         "key": "PROBE_SIGNER_PASSPHRASE",
         "required": false,
         "secret": true,
-        "desc": "passphrase for the ticket-signing key; the key itself is found by the appointment's bound address in artifacts/keystores/"
+        "from": "cred:prober.passphrase",
+        "desc": "passphrase for the ticket-signing key; the key itself is found by the appointment's bound address in artifacts/keystores/. `isann cred issue -enroll` fills this in — it is the same passphrase that signed the appointment, and `from` is what tells it so without the CLI knowing this key's name"
       },
       {
         "key": "PROBE_KEYSTORES_DIR",
@@ -61,16 +62,22 @@
         "desc": "seconds between firing rounds (default 60)"
       },
       {
-        "key": "PROBE_RESPONSE_DEADLINE_SEC",
+        "key": "PROBE_TEXT_DEADLINE_SEC",
         "required": false,
         "secret": false,
-        "desc": "base answer deadline; scaled up for larger declared models (default 30)"
+        "desc": "how long a TEXT answer may take, in seconds (default 30), scaled up for larger declared models so a bigger model is not penalised for being one. Pairs with PROBE_IMAGE_DEADLINE_SEC - one knob per track. Supersedes PROBE_RESPONSE_DEADLINE_SEC, which is still read"
       },
       {
         "key": "PROBE_REFRESH_SEC",
         "required": false,
         "secret": false,
         "desc": "seconds between node-directory refreshes (default 3600)"
+      },
+      {
+        "key": "PROBE_DEFER_MAX",
+        "required": false,
+        "secret": false,
+        "desc": "how many rounds an image shot waits for the node's queue to clear before going out anyway (default 10). Ordering into an empty queue is what makes the measured time mean something, but a node that is busy all day is a node with customers - so the wait ends rather than excluding it. 0 = never wait"
       },
       {
         "key": "PROBE_DB",
@@ -82,7 +89,7 @@
         "key": "PROBE_IMAGE_DEADLINE_SEC",
         "required": false,
         "secret": false,
-        "desc": "how long a node gets to draw a picture. unset = derived from the node's own reported avg_job_sec (x2, floor 300s, ceiling 900s), which is almost always the right answer"
+        "desc": "how long a node gets to draw a picture, in seconds. Pairs with PROBE_TEXT_DEADLINE_SEC - one knob per track. 0 or unset = derived from the node's own reported avg_job_sec (x2, floor 300s, ceiling 900s), which is almost always the right answer: a fixed value made a 4GB card time out on every shot while it drew every picture correctly"
       },
       {
         "key": "PROBE_FIRE_AT_SELF",

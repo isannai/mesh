@@ -1,7 +1,10 @@
 package probe
 
 import (
+	"encoding/json"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -266,30 +269,117 @@ func TestImageDeadlineFollowsReportedSpeed(t *testing.T) {
 	}
 }
 
-// A node still working on the last order must not be given another. The
-// deadline expiring does not stop the node; firing again only queues behind
-// work we have already stopped waiting for.
-func TestBusyNodesAreSkipped(t *testing.T) {
-	m, err := rvnodes.DecodeMetrics([]byte(`[
-		{"node_id":"S:0xAAA","service":"sd-api","running_count":1},
-		{"node_id":"S:0xBBB","service":"sd-api","queue_depth":2},
-		{"node_id":"S:0xCCC","service":"sd-api","running_count":0,"queue_depth":0}
-	]`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := &Prober{metrics: m}
+// queueServer answers /v1/queue/stats per node id so holdBusy can be driven
+// without a station. A node with no entry gets a 500 — the "we could not read
+// it" case, which must not block firing.
+func queueServer(t *testing.T, byNode map[string]QueueStats) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/") // /node/<id>/v1/queue/stats
+		if len(parts) < 2 {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
+		qs, ok := byNode[parts[1]]
+		if !ok {
+			http.Error(w, "no such node", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(qs)
+	}))
+}
+
+// A node still drawing must not be given another order: firing again only
+// queues behind work we are already waiting on. But the wait has to END — a
+// node busy every round is a node with customers, and excluding it permanently
+// is backwards.
+func TestBusyNodesAreDeferredThenFired(t *testing.T) {
+	srv := queueServer(t, map[string]QueueStats{
+		"S:0xAAA": {Running: 1}, // mid-picture
+		"S:0xBBB": {Pending: 2}, // queued behind two
+		"S:0xCCC": {},           // idle
+	})
+	defer srv.Close()
+
+	p := &Prober{firer: NewFirer(srv.URL), deferrals: map[string]int{}, deferMax: 2}
 	svc := rvnodes.Service{Name: "sd-api"}
 	due := []Target{
-		{Node: rvnodes.Node{ID: "S:0xAAA"}, Service: svc}, // running
-		{Node: rvnodes.Node{ID: "S:0xBBB"}, Service: svc}, // queued
-		{Node: rvnodes.Node{ID: "S:0xCCC"}, Service: svc}, // idle
-		{Node: rvnodes.Node{ID: "S:0xZZZ"}, Service: svc}, // unknown
+		{Node: rvnodes.Node{ID: "S:0xAAA"}, Service: svc},
+		{Node: rvnodes.Node{ID: "S:0xBBB"}, Service: svc},
+		{Node: rvnodes.Node{ID: "S:0xCCC"}, Service: svc},
+		{Node: rvnodes.Node{ID: "S:0xZZZ"}, Service: svc}, // unreadable
 	}
-	got := p.dropBusy(due)
-	// Unknown is fired at: one flaky metrics poll must not stop the track.
-	if len(got) != 2 || got[0].Node.ID != "S:0xCCC" || got[1].Node.ID != "S:0xZZZ" {
-		t.Fatalf("kept %+v, want only the idle and the unknown node", got)
+
+	// Rounds 1-2: only the idle node and the one we cannot read go out. Unknown
+	// is NOT blocked — one faulted request must not stop the whole track.
+	for round := 1; round <= 2; round++ {
+		got := p.holdBusy(due)
+		if len(got) != 2 || got[0].Node.ID != "S:0xCCC" || got[1].Node.ID != "S:0xZZZ" {
+			t.Fatalf("round %d kept %+v, want the idle and the unreadable node", round, got)
+		}
+	}
+
+	// Round 3: the busy pair has hit deferMax and goes out anyway.
+	if got := p.holdBusy(due); len(got) != 4 {
+		t.Fatalf("after %d deferrals kept %d targets, want all 4 — a permanently "+
+			"busy node must not be excluded forever", p.deferMax, len(got))
+	}
+}
+
+// The count is what separates "no GPU" from "GPU, but working" when read next
+// to the latency, so it must land on the shot and not follow the node into the
+// next one.
+func TestDeferralCountAccumulates(t *testing.T) {
+	srv := queueServer(t, map[string]QueueStats{"S:0xAAA": {Pending: 1}})
+	defer srv.Close()
+
+	p := &Prober{firer: NewFirer(srv.URL), deferrals: map[string]int{}, deferMax: 5}
+	due := []Target{{Node: rvnodes.Node{ID: "S:0xAAA"}, Service: rvnodes.Service{Name: "sd-api"}}}
+
+	p.holdBusy(due)
+	p.holdBusy(due)
+	if got := p.deferrals[shotKey("S:0xAAA", "sd-api")]; got != 2 {
+		t.Fatalf("deferrals = %d, want 2", got)
+	}
+}
+
+// A node with a picture still on order is not sent another. This is what keeps
+// a slow node's queue from growing under us.
+func TestOpenShotBlocksFurtherFiring(t *testing.T) {
+	svc := rvnodes.Service{Name: "sd-api"}
+	due := []Target{
+		{Node: rvnodes.Node{ID: "S:0xAAA"}, Service: svc},
+		{Node: rvnodes.Node{ID: "S:0xBBB"}, Service: svc},
+	}
+	got := dropOpen(due, map[string]bool{shotKey("S:0xAAA", "sd-api"): true})
+	if len(got) != 1 || got[0].Node.ID != "S:0xBBB" {
+		t.Fatalf("kept %+v, want only the node with nothing outstanding", got)
+	}
+}
+
+// The order has to survive the round that placed it: judging happens later now,
+// possibly after a restart, and a picture with no checks on record can never be
+// scored at all.
+func TestOrderRoundTrip(t *testing.T) {
+	o := ImageOrder{Prompt: "a red fox, a library, wide shot", Checks: []Check{
+		{Label: "subject", Expect: "a red fox", Alternatives: []string{"a red hammer"}},
+		{Label: "style", Expect: "a photo", Alternatives: []string{"a sketch"}},
+	}}
+	got, ok := decodeOrder(encodeOrder(o))
+	if !ok {
+		t.Fatal("order did not survive the round trip")
+	}
+	if got.Prompt != o.Prompt || len(got.Checks) != len(o.Checks) || got.Checks[0].Label != "subject" {
+		t.Fatalf("decoded %+v, want %+v", got, o)
+	}
+	// A checkless order must report failure rather than being judged against
+	// nothing: RequiredPass on an empty judgement is a fail, which would blame
+	// the node for OUR missing record.
+	if _, ok := decodeOrder(""); ok {
+		t.Error("empty order decoded as usable")
+	}
+	if _, ok := decodeOrder(`{"Prompt":"x"}`); ok {
+		t.Error("order with no checks decoded as usable")
 	}
 }
 

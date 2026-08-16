@@ -12,7 +12,8 @@
 
   "queue_low_water": 1,
   "question_fanout": 2,
-  "response_deadline_sec": 60,
+  "text_deadline_sec": 60,
+  "defer_max": 0,
 
   "signer": { "passphrase": "" }
 }

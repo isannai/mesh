@@ -43,7 +43,7 @@ func (s *Store) Report(limit int) (string, error) {
 		SELECT s.fired_at, s.node_id, s.outcome, COALESCE(s.verdict,''),
 		       COALESCE(s.latency_ms,0), COALESCE(s.completion_tokens,0),
 		       COALESCE(q.category,''), COALESCE(q.q,''), COALESCE(q.draft_answer,''),
-		       COALESCE(s.answer_raw,'')
+		       COALESCE(s.answer_raw,''), COALESCE(s.deferred,0)
 		  FROM shot s LEFT JOIN question q ON q.id = s.question_id
 		 ORDER BY s.id DESC LIMIT ?`, limit)
 	if err != nil {
@@ -56,11 +56,11 @@ func (s *Store) Report(limit int) (string, error) {
 		var (
 			firedMs, latency          int64
 			node, outcome, verdict    string
-			tokens                    int
+			tokens, deferred          int
 			cat, q, expected, gotText string
 		)
 		if err := rows.Scan(&firedMs, &node, &outcome, &verdict, &latency, &tokens,
-			&cat, &q, &expected, &gotText); err != nil {
+			&cat, &q, &expected, &gotText, &deferred); err != nil {
 			return "", err
 		}
 		any = true
@@ -73,6 +73,12 @@ func (s *Store) Report(limit int) (string, error) {
 		}
 		if tokens > 0 {
 			fmt.Fprintf(&b, "  %dtok", tokens)
+		}
+		if deferred > 0 {
+			// Printed next to the latency because it is what explains it. A slow
+			// time with a count is a busy node; a slow time without one is a node
+			// that was idle and still took that long.
+			fmt.Fprintf(&b, "  (deferred %d)", deferred)
 		}
 		b.WriteString("\n")
 		if q == "" && gotText != "" {
@@ -96,6 +102,22 @@ func (s *Store) Report(limit int) (string, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
+	}
+
+	// What a node CAN do, which is not the same question as what it did on any
+	// one shot. Queueing inflates a time and nothing deflates it, so the day's
+	// fastest is the tightest honest reading of the hardware — and the number to
+	// look at when deciding where a pass threshold belongs.
+	fmt.Fprintf(&b, "\nBEST TODAY (fastest answered shot per service)\n")
+	if best, err := s.DailyBestMs(dayStart(time.Now())); err == nil {
+		if len(best) == 0 {
+			fmt.Fprintf(&b, "  none — nothing has been answered today\n")
+		}
+		for key, ms := range best {
+			node, service, _ := strings.Cut(key, "|")
+			fmt.Fprintf(&b, "  %-14s %-10s %s\n", short(node), service,
+				(time.Duration(ms) * time.Millisecond).Round(time.Millisecond))
+		}
 	}
 
 	fmt.Fprintf(&b, "\nOBSERVATIONS\n")

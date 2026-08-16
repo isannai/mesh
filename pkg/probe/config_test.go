@@ -106,6 +106,58 @@ func TestLegacyGeneratorServiceKey(t *testing.T) {
 	}
 }
 
+// The two deadlines were named inconsistently — one said what it waited FOR
+// (response), its sibling said what it was ABOUT (image) — so they read as
+// unrelated settings when they are the same knob per track. Renaming a key in a
+// config that is already deployed is only safe if the old spelling keeps
+// working: an operator who raised it for a 70B model and silently got 30s back
+// would see every shot time out.
+func TestLegacyResponseDeadlineKey(t *testing.T) {
+	t.Run("old key is carried over", func(t *testing.T) {
+		cfg, err := LoadConfig(writeConfig(t, `{"response_deadline_sec":90}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TextDeadline != 90 {
+			t.Errorf("TextDeadline = %d, want the legacy 90", cfg.TextDeadline)
+		}
+	})
+
+	t.Run("explicit new key wins", func(t *testing.T) {
+		cfg, err := LoadConfig(writeConfig(t,
+			`{"response_deadline_sec":90,"text_deadline_sec":45}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TextDeadline != 45 {
+			t.Errorf("TextDeadline = %d, want the explicit new key", cfg.TextDeadline)
+		}
+	})
+
+	t.Run("old env var is carried over too", func(t *testing.T) {
+		// The absorb runs AFTER the environment for exactly this: a node whose
+		// mesh config still holds the old name would otherwise be reset.
+		t.Setenv("PROBE_RESPONSE_DEADLINE_SEC", "120")
+		cfg, err := LoadConfig(writeConfig(t, `{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TextDeadline != 120 {
+			t.Errorf("TextDeadline = %d, want the legacy env value", cfg.TextDeadline)
+		}
+	})
+
+	t.Run("neither set leaves the default", func(t *testing.T) {
+		cfg, err := LoadConfig(writeConfig(t, `{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TextDeadline != DefaultConfig().TextDeadline {
+			t.Errorf("TextDeadline = %d, want the default", cfg.TextDeadline)
+		}
+	})
+}
+
 // The ladder is configured in SECONDS. Hours cannot express a smoke test:
 // ten seconds is 0.00277 hours, which nobody can read and everybody mistypes.
 func TestScheduleSeconds(t *testing.T) {
