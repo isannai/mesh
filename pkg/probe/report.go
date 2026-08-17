@@ -136,13 +136,14 @@ func (s *Store) Report(limit int) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "  %d rows, %d nodes, %s → %s\n", n, distinct,
 			time.UnixMilli(firstMs).Format("15:04:05"), time.UnixMilli(lastMs).Format("15:04:05"))
-		// The anchor is what the schedule actually measures against, so it is
-		// worth showing next to the raw counts — a node observed for an hour
-		// but re-anchored ten minutes ago is due for nothing.
+		// Time present is what the schedule measures against, so it belongs next
+		// to the raw counts. It is a TOTAL across gaps, not a run length: a node
+		// that was up all morning, off for lunch and back since is credited with
+		// both halves.
 		if sightings, err := s.SightingsToday(dayStart(time.Now())); err == nil {
-			for id, anchor := range anchorsFrom(sightings) {
-				fmt.Fprintf(&b, "  %s  up %s (anchor %s)\n", short(id),
-					time.Since(anchor).Round(time.Second), anchor.Format("15:04:05"))
+			for id, present := range presenceFrom(sightings) {
+				fmt.Fprintf(&b, "  %s  present %s today\n", short(id),
+					present.Round(time.Minute))
 			}
 		}
 	}

@@ -11,27 +11,26 @@ import (
 // The config now takes seconds, so convert on the way in.
 func hrs(v ...float64) []time.Duration { return parseScheduleSec(hoursToSec(v)) }
 
-// The ladder is the whole point: five scattered shots would prove "alive five
-// times", while widening gaps prove "there all day".
+// The ladder is the whole point: six scattered shots would prove "alive six
+// times", while thresholds that keep climbing prove "there for most of the day".
 func TestDueShots(t *testing.T) {
-	sch := hrs(1, 3, 5, 8, 13)
-	anchor := time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)
+	sch := hrs(3, 6, 9, 12, 15)
 
 	cases := []struct{ up, want float64 }{
-		{0, 0}, {0.9, 0}, {1, 1}, {2.9, 1}, {3, 2}, {4.9, 2},
-		{5, 3}, {7.9, 3}, {8, 4}, {12.9, 4}, {13, 5}, {30, 5},
+		{0, 0}, {2.9, 0}, {3, 1}, {5.9, 1}, {6, 2}, {8.9, 2},
+		{9, 3}, {11.9, 3}, {12, 4}, {15, 5}, {30, 5},
 	}
 	for _, c := range cases {
-		now := anchor.Add(time.Duration(c.up * float64(time.Hour)))
-		if got := DueShots(anchor, now, sch); got != int(c.want) {
-			t.Errorf("after %.1fh: due = %d, want %.0f", c.up, got, c.want)
+		present := time.Duration(c.up * float64(time.Hour))
+		if got := DueShots(present, sch); got != int(c.want) {
+			t.Errorf("after %.1fh present: due = %d, want %.0f", c.up, got, c.want)
 		}
 	}
 
-	// Never observed today ⇒ nothing is owed. A node with no anchor is not
-	// "due everything", which is what a zero time would mean if compared naively.
-	if got := DueShots(time.Time{}, anchor, sch); got != 0 {
-		t.Errorf("no anchor: due = %d, want 0", got)
+	// Never seen today ⇒ nothing is owed. Zero must not read as "due
+	// everything", which is what a naive comparison against an empty value gives.
+	if got := DueShots(0, sch); got != 0 {
+		t.Errorf("never seen: due = %d, want 0", got)
 	}
 }
 
@@ -55,59 +54,95 @@ func TestParseScheduleSortsAndDefaults(t *testing.T) {
 
 // 🔴 The forgiving part. A home connection drops — ISP resets, DHCP renewals, a
 // sleeping laptop — and a node reconnecting every 90 minutes must not be locked
-// out forever. Continuity is measured between hourly polls, so a blip that
-// falls between them is invisible.
-func TestAnchorsForgiveShortGaps(t *testing.T) {
+// out. Presence is measured between hourly polls, so a blip that falls between
+// them is invisible.
+func TestPresenceForgivesShortGaps(t *testing.T) {
 	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 	obs := []NodeSighting{
 		{"a", base},
 		{"a", base.Add(time.Hour)},     // the node reconnected in between —
 		{"a", base.Add(2 * time.Hour)}, // invisible at this granularity
 	}
-	got := anchorsFrom(obs)
-	if !got["a"].Equal(base) {
-		t.Errorf("anchor = %s, want the original %s", got["a"], base)
+	if got := presenceFrom(obs)["a"]; got != 2*time.Hour {
+		t.Errorf("present = %s, want the full 2h", got)
 	}
 }
 
-// A genuine absence does reset it: missing two polls is not a blip.
-func TestAnchorsResetOnRealAbsence(t *testing.T) {
+// 🔴 THE CHANGE FROM CONTINUOUS TO CUMULATIVE. A real absence is not counted,
+// but it no longer erases what came before. Under the old anchor rule this node
+// would have been back to zero and every hour of the morning thrown away — the
+// ISP being measured instead of the machine.
+func TestPresenceSurvivesARealAbsence(t *testing.T) {
 	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-	back := base.Add(4 * time.Hour)
+	back := base.Add(5 * time.Hour)
 	obs := []NodeSighting{
 		{"a", base},
 		{"a", base.Add(time.Hour)},
-		// 01:00 → 04:00: three hours missing, well past observationGap
+		{"a", base.Add(2 * time.Hour)}, // 2h earned here
+		// 02:00 → 05:00: three hours away, well past observationGap
 		{"a", back},
-		{"a", back.Add(time.Hour)},
+		{"a", back.Add(time.Hour)}, // 1h more
 	}
-	if got := anchorsFrom(obs)["a"]; !got.Equal(back) {
-		t.Errorf("anchor = %s, want the restart at %s", got, back)
+	if got := presenceFrom(obs)["a"]; got != 3*time.Hour {
+		t.Errorf("present = %s, want 2h + 1h = 3h (the 3h gap uncounted, "+
+			"the morning NOT erased)", got)
 	}
 }
 
-func TestAnchorsPerNode(t *testing.T) {
+// The case that started this: four tickets earned, a two-hour break, then three
+// hours back. Cumulatively that is 15h and the fifth ticket is owed.
+//
+// 🔴 Under the old anchor rule the break reset everything, so those first twelve
+// hours were gone and the fifth ticket was out of reach for the rest of the day.
+func TestPresenceAcrossABreakStillReachesTheTop(t *testing.T) {
+	sch := hrs(3, 6, 9, 12, 15)
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+
+	var obs []NodeSighting
+	for h := 0; h <= 12; h++ { // 12h present
+		obs = append(obs, NodeSighting{"a", base.Add(time.Duration(h) * time.Hour)})
+	}
+	if got := DueShots(presenceFrom(obs)["a"], sch); got != 4 {
+		t.Fatalf("after 12h: due = %d, want 4", got)
+	}
+	back := base.Add(14 * time.Hour) // two hours away
+	for h := 0; h <= 3; h++ {
+		obs = append(obs, NodeSighting{"a", back.Add(time.Duration(h) * time.Hour)})
+	}
+	if got := presenceFrom(obs)["a"]; got != 15*time.Hour {
+		t.Fatalf("present = %s, want 15h", got)
+	}
+	if got := DueShots(presenceFrom(obs)["a"], sch); got != 5 {
+		t.Errorf("after the break: due = %d, want 5 — the break costs its own "+
+			"two hours and nothing more", got)
+	}
+}
+
+func TestPresencePerNode(t *testing.T) {
 	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 	obs := []NodeSighting{
 		{"a", base},
 		{"a", base.Add(time.Hour)},
 		{"b", base.Add(2 * time.Hour)},
 		{"b", base.Add(3 * time.Hour)},
+		{"b", base.Add(4 * time.Hour)},
 	}
-	got := anchorsFrom(obs)
-	if !got["a"].Equal(base) || !got["b"].Equal(base.Add(2*time.Hour)) {
-		t.Errorf("anchors = %v", got)
+	got := presenceFrom(obs)
+	if got["a"] != time.Hour || got["b"] != 2*time.Hour {
+		t.Errorf("presence = %v", got)
 	}
-	if len(anchorsFrom(nil)) != 0 {
-		t.Error("no sightings should give no anchors")
+	// Seen once and only once: an instant, not a span.
+	if got := presenceFrom([]NodeSighting{{"c", base}})["c"]; got != 0 {
+		t.Errorf("a single sighting = %s, want 0", got)
+	}
+	if len(presenceFrom(nil)) != 0 {
+		t.Error("no sightings should give no presence")
 	}
 }
 
 // A node is fired at because it EARNED the shot, not because it was drawn.
 func TestDueTargets(t *testing.T) {
-	sch := hrs(1, 3, 5, 8, 13)
-	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-	now := base.Add(6 * time.Hour) // 3 thresholds crossed
+	sch := hrs(3, 6, 9, 12, 15)
 
 	targets := eligible([]rvnodes.Node{
 		node("up", "203.0.113.1:1", "public", true),
@@ -115,15 +150,15 @@ func TestDueTargets(t *testing.T) {
 		node("done", "203.0.113.3:1", "public", true),
 		node("unseen", "203.0.113.4:1", "public", true),
 	}, nil)
-	anchors := map[string]time.Time{
-		"up":    base,
-		"fresh": now.Add(-30 * time.Minute), // not past the first threshold
-		"done":  base,
-		// "unseen" has no anchor at all
+	present := map[string]time.Duration{
+		"up":    7 * time.Hour,    // 2 thresholds crossed, 1 shot taken
+		"fresh": 30 * time.Minute, // not past the first threshold
+		"done":  7 * time.Hour,    // 2 crossed, already had 3 (config changed under it)
+		// "unseen" has no presence at all
 	}
 	shots := map[string]int{"up": 1, "done": 3}
 
-	due := dueTargets(targets, anchors, shots, sch, now)
+	due := dueTargets(targets, present, shots, sch)
 	if len(due) != 1 || due[0].Node.ID != "up" {
 		t.Fatalf("due = %+v, want only the node owed a shot", due)
 	}

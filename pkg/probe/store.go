@@ -369,6 +369,36 @@ func (s *Store) FailShot(id int64, at time.Time, outcome string) error {
 	return err
 }
 
+// PassesToday counts each node's earned tickets for the day.
+//
+// This is the whole of what a ticket carries: how many of the day's five a node
+// earned. What they are WORTH is the voucher's business, decided from this
+// count when it is signed, so nothing here needs redeploying to change a rate.
+//
+// Counted from the rows rather than kept as a running total. A stored counter
+// would be a second copy of what the rows already say, and the two drift on the
+// first correction — a shot re-judged, a row cleaned up.
+func (s *Store) PassesToday(dayStart time.Time) (map[string]int, error) {
+	rows, err := s.db.Query(
+		`SELECT node_id, COUNT(*) FROM shot
+		  WHERE fired_at>=? AND verdict=? GROUP BY node_id`,
+		dayStart.UnixMilli(), VerdictPass)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // ShotsToday counts shots fired at a node since the start of the current day.
 //
 // This enforces the per-node daily cap, so it deliberately counts EVERY shot

@@ -177,9 +177,9 @@ func DefaultConfig() Config {
 	return Config{
 		RefreshSec:       3600,
 		FireIntervalSec:  60,
-		// 1 · 3 · 5 · 8 · 13 hours, written out so the file that ships is the
+		// 3 · 6 · 9 · 12 · 15 hours, written out so the file that ships is the
 		// same shape an operator edits.
-		ScheduleSec:      []float64{3600, 10800, 18000, 28800, 46800},
+		ScheduleSec:      []float64{10800, 21600, 32400, 43200, 54000},
 		TextDeadline:     30,
 		GeneratorService: "llm-api",
 		ClipService:      "clip-api",
@@ -434,10 +434,10 @@ type Prober struct {
 	imgTargets []Target
 	idleLogged bool
 
-	// schedule is the uptime ladder; anchors is each node's continuity start,
-	// both recomputed on refresh.
+	// schedule is the uptime ladder; present is how much of today each node has
+	// been up for, totalled across gaps. Both recomputed on refresh.
 	schedule []time.Duration
-	anchors  map[string]time.Time
+	present  map[string]time.Duration
 
 	// metrics is the RV's volatile per-service view, refreshed alongside the
 	// directory. It answers how long this node typically takes (imageDeadline),
@@ -577,7 +577,7 @@ func New(cfg Config) (*Prober, error) {
 		http:      client,
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		schedule:  parseScheduleSec(cfg.Schedule()),
-		anchors:   map[string]time.Time{},
+		present:   map[string]time.Duration{},
 		deferrals: map[string]int{},
 		deferMax:  cfg.DeferMax,
 		openShots: map[string]bool{},
@@ -723,13 +723,13 @@ func (p *Prober) Refresh() {
 		p.imgTargets = nil
 	}
 
-	// Continuity anchors, recomputed from the observation history this poll
-	// just extended. Derived from the table rather than kept in memory so a
-	// prober restart does not reset everyone's day.
+	// Time present today, recomputed from the observation history this poll just
+	// extended. Derived from the table rather than kept in memory so a prober
+	// restart does not reset everyone's day.
 	if sightings, err := p.store.SightingsToday(dayStart(now)); err != nil {
 		log.Printf("[probe] sightings: %v", err)
 	} else {
-		p.anchors = anchorsFrom(sightings)
+		p.present = presenceFrom(sightings)
 	}
 	log.Printf("[probe] directory: %d nodes, %d eligible, %d image", len(nodes), len(p.targets), len(p.imgTargets))
 
@@ -901,7 +901,7 @@ func (p *Prober) FireRound() {
 	// no text node was due, which silently took the image round with it — a
 	// node serving only sd-api was then never fired at, and the log said
 	// nothing at all because the summary line lives past this point.
-	due := dueTargets(p.targets, p.anchors, counts, p.schedule, now)
+	due := dueTargets(p.targets, p.present, counts, p.schedule)
 	groups := groupBySlash24(due)
 	if len(groups) > 0 {
 		p.fireTextGroups(groups, now, &stats)
@@ -1160,6 +1160,7 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		fetched.PromptTokens, fetched.CompletionTokens, fetched.Answer, OutcomeAnswered, verdict); err != nil {
 		log.Printf("[probe] complete shot: %v", err)
 	}
+	p.noteTicket(t.Node.ID, verdict, end)
 	switch verdict {
 	case VerdictFail:
 		log.Printf("[probe] %s answered %q, expected %q (%s)",
@@ -1170,6 +1171,28 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		log.Printf("[probe] %s hit the %d-token cap: %q (expected %q) — not scored",
 			short(t.Node.ID), probeMaxTokens, trim(fetched.Answer), q.Draft)
 	}
+}
+
+// noteTicket says a node just earned one of the day's tickets.
+//
+// 🔴 It only SAYS so. The ticket is the passing row itself, already written by
+// the caller, and the count is derived from the rows whenever anyone asks
+// (PassesToday). What a ticket is worth is decided when the voucher is signed,
+// so nothing here needs to know a rate.
+//
+// A failed count is not worth failing over: this line is for the operator
+// watching the log, and the rows carry the fact regardless.
+func (p *Prober) noteTicket(nodeID, verdict string, at time.Time) {
+	if verdict != VerdictPass {
+		return
+	}
+	counts, err := p.store.PassesToday(dayStart(at))
+	if err != nil {
+		log.Printf("[probe] %s earned a ticket", short(nodeID))
+		return
+	}
+	log.Printf("[probe] %s earned a ticket (%d/%d today)",
+		short(nodeID), counts[nodeID], len(p.schedule))
 }
 
 // trim shortens an answer for a log line.

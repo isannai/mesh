@@ -359,6 +359,11 @@ func (p *Prober) collectImageShot(sh Shot, now time.Time, stats *roundStats) boo
 		imageNote(o, &j), OutcomeAnswered, verdict); e != nil {
 		log.Printf("[probe] complete image shot: %v", e)
 	}
+	// Scored against the day the shot was FIRED, not the day it was collected.
+	// A picture ordered at 23:58 and picked up after midnight belongs to the
+	// day it was earned in, and paying it into the new one would give that node
+	// a head start it did not work for.
+	p.noteTicket(sh.NodeID, verdict, sh.FiredAt)
 	stats.settle(OutcomeAnswered, verdict)
 	if verdict == VerdictFail {
 		log.Printf("[probe] %s image failed: %s", short(sh.NodeID), failedChecks(j))
@@ -530,7 +535,7 @@ func (p *Prober) fireImageRound(now time.Time, shotsToday map[string]int, stats 
 	if len(p.imgTargets) == 0 || !p.validator.Enabled() {
 		return
 	}
-	due := dueTargets(p.imgTargets, p.anchors, shotsToday, p.schedule, now)
+	due := dueTargets(p.imgTargets, p.present, shotsToday, p.schedule)
 	// A node whose last picture is still on order is not fired at again. That is
 	// what keeps a slow node's queue from growing under us — the failure mode
 	// the old blocking collect produced, one abandoned job at a time.

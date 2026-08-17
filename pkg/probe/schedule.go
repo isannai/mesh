@@ -2,16 +2,15 @@ package probe
 
 // schedule.go — when each node's next shot is due.
 //
-// A node earns its five shots by STAYING UP, not by being lucky enough to be
-// picked. The n-th shot becomes due once the node has been continuously present
-// for the n-th threshold:
+// A node earns its five shots by BEING UP, not by being lucky enough to be
+// picked. The n-th shot becomes due once the node has been present for the n-th
+// threshold, counted across the whole day:
 //
-//	1h → 1st    3h → 2nd    5h → 3rd    8h → 4th    13h → 5th
+//	3h → 1st   6h → 2nd   9h → 3rd   12h → 4th   15h → 5th
 //
 // That is the whole point of the faucet: five randomly scattered shots would
-// only prove "this node was alive five times", while widening gaps prove "this
-// node was there all day". The gaps grow (1, 2, 2, 3, 5) so the early checks
-// weed out a node that was just switched on, and the late ones cover the day.
+// only prove "this node was alive five times", while thresholds that keep
+// climbing prove "this node was there for most of the day".
 //
 // WHY NOT `connected_at` DIRECTLY
 //
@@ -34,19 +33,28 @@ import (
 
 // DefaultSchedule is the uptime each shot requires.
 //
-// Two independent knobs live in this list, and they were chosen separately:
+// A flat three-hour step, chosen over the widening 1/3/5/8/13 ladder it
+// replaced. Two knobs live in the list and they were decided separately:
 //
 //	the FIRST entry   decides whether an unstable node earns anything at all.
-//	                  One hour rather than two because "0 tickets" and "some
-//	                  tickets" are the difference between taking part and not.
-//	the LAST entry    decides how late in the day a node can connect and still
-//	                  earn the full five: 13h means connecting by 11:00 UTC.
+//	the LAST entry    decides how much of a day earns the full five: 15h is
+//	                  most of a waking day, and leaves room to fall short.
+//
+// 🔴 THE FIRST ENTRY COSTS SOMETHING, DELIBERATELY. At one hour a machine that
+// is only ever on for a couple of hours still earned a ticket; at three it
+// earns nothing. That is the accepted price of a rule that reads as one
+// sentence — "every three hours, five a day" — instead of a paragraph
+// explaining why the gaps widen. Uniform spacing is also what makes the point
+// curve legible: every ticket stands for the same three hours.
+//
+// The length of this list IS the daily cap, and PointCurve must have an entry
+// for each.
 var DefaultSchedule = []time.Duration{
-	1 * time.Hour,
 	3 * time.Hour,
-	5 * time.Hour,
-	8 * time.Hour,
-	13 * time.Hour,
+	6 * time.Hour,
+	9 * time.Hour,
+	12 * time.Hour,
+	15 * time.Hour,
 }
 
 // parseScheduleSec turns configured SECONDS into durations, falling back to the
@@ -96,59 +104,66 @@ func hoursToSec(hours []float64) []float64 {
 	return out
 }
 
-// observationGap is how long a node may vanish between polls and still keep its
-// anchor.
+// observationGap is how long a node may vanish between polls and still be
+// counted as having been there the whole time.
 //
 // Slightly more than the hourly poll so one missed poll is forgiven and two are
 // not: a poll can be late (a slow directory fetch, a restarted prober), and
-// resetting a node's whole day over that would punish the prober's hiccup
-// rather than the node's.
+// charging a node for the prober's hiccup would be measuring the wrong machine.
 const observationGap = 100 * time.Minute
 
-// anchorsFrom derives each node's continuity anchor from observation history.
+// presenceFrom totals how long each node has been up today.
 //
-// The anchor is the start of the node's most recent unbroken run of sightings.
-// A gap longer than observationGap ends the run, so the anchor moves forward
-// and the node starts earning again from the first threshold.
+// 🔴 CUMULATIVE, NOT CONTINUOUS. This used to track an anchor — the start of the
+// most recent unbroken run — and any gap longer than observationGap threw the
+// whole day away and started the ladder over. A home connection that drops once
+// in the afternoon lost every hour it had already earned, and one that drops
+// every couple of hours could never reach even the first threshold no matter
+// how long the machine was left on. It was measuring the ISP, not the node.
 //
-// obs must be ordered by node then time; StoreObservationsToday returns it that
-// way so this is a single pass.
-func anchorsFrom(obs []NodeSighting) map[string]time.Time {
-	out := map[string]time.Time{}
+// Time present is added up instead. A gap is not counted (the node was away and
+// earns nothing for it) but it does not erase what came before either. Eighteen
+// hours is still eighteen hours of a twenty-four hour day, so the statement the
+// faucet wants — "this machine was there for most of the day" — survives being
+// made of pieces.
+//
+// obs must be ordered by node then time; SightingsToday returns it that way so
+// this is a single pass.
+func presenceFrom(obs []NodeSighting) map[string]time.Duration {
+	out := map[string]time.Duration{}
 	var (
 		current string
-		anchor  time.Time
 		prev    time.Time
 	)
 	for _, o := range obs {
 		if o.NodeID != current {
-			current, anchor, prev = o.NodeID, o.SeenAt, o.SeenAt
-			out[current] = anchor
+			// First sighting of this node. It carries no span of its own: the
+			// node was seen at an instant, and time only accrues between two
+			// sightings.
+			current, prev = o.NodeID, o.SeenAt
+			if _, ok := out[current]; !ok {
+				out[current] = 0
+			}
 			continue
 		}
-		if o.SeenAt.Sub(prev) > observationGap {
-			anchor = o.SeenAt // the run broke; start over
+		if gap := o.SeenAt.Sub(prev); gap <= observationGap {
+			out[current] += gap
 		}
 		prev = o.SeenAt
-		out[current] = anchor
 	}
 	return out
 }
 
 // DueShots reports how many shots a node is owed right now.
 //
-// It returns the number of thresholds already crossed, so the caller compares
-// it against how many shots the node has actually had today. Zero means "not
-// yet" — either the node has not been up long enough, or it has no anchor at
-// all (never observed today).
-func DueShots(anchor time.Time, now time.Time, schedule []time.Duration) int {
-	if anchor.IsZero() {
-		return 0
-	}
-	up := now.Sub(anchor)
+// It returns the number of thresholds its accumulated presence has passed, so
+// the caller compares that against how many shots the node has actually had
+// today. Zero means "not yet" — either it has not been up long enough, or it
+// has not been seen at all today.
+func DueShots(present time.Duration, schedule []time.Duration) int {
 	n := 0
 	for _, threshold := range schedule {
-		if up < threshold {
+		if present < threshold {
 			break
 		}
 		n++
@@ -156,17 +171,27 @@ func DueShots(anchor time.Time, now time.Time, schedule []time.Duration) int {
 	return n
 }
 
+// 🔴 THE PROBER DOES NOT SCORE. It counts: how many of the day's five tickets a
+// node earned, which is the number of passing shots on record. What a ticket is
+// WORTH is decided when the voucher is signed, from that count, by the RV — so
+// the curve lives there and nothing here has to be redeployed to change it.
+//
+// The temptation is to store points alongside each shot "while we know them".
+// It buys nothing and costs correctness: a stored figure is a second copy of
+// something the rows already say, and the two drift the moment the curve moves.
+// The rows are the record.
+
 // dueTargets picks the nodes whose next shot has come due.
 //
 // This replaces choosing at random: a node is fired at because it earned the
-// shot by staying up, not because it was drawn. Load spreads on its own, since
-// nodes anchor at whatever time they happened to connect.
-func dueTargets(targets []Target, anchors map[string]time.Time, shotsToday map[string]int,
-	schedule []time.Duration, now time.Time) []Target {
+// shot by being up, not because it was drawn. Load spreads on its own, since
+// nodes reach each threshold at whatever hour they happened to accumulate it.
+func dueTargets(targets []Target, present map[string]time.Duration, shotsToday map[string]int,
+	schedule []time.Duration) []Target {
 
 	var out []Target
 	for _, t := range targets {
-		due := DueShots(anchors[t.Node.ID], now, schedule)
+		due := DueShots(present[t.Node.ID], schedule)
 		if due > shotsToday[t.Node.ID] {
 			out = append(out, t)
 		}
