@@ -48,14 +48,19 @@ var slotsJSON []byte
 
 // slotTable is the parsed vocabulary.
 //
-// Subject, style and colour are grouped by category; composition is a flat list
-// because its values are already far apart (close-up / wide shot / aerial view)
-// and inventing categories for them would buy nothing.
+// Subject and colour are grouped by category; composition is a flat list
+// because its values are already far apart and inventing categories for them
+// would buy nothing.
 //
 // 🔴 "macro shot" was REMOVED from that list. CLIP cannot separate it from
 // "close-up" — they are the same picture — so it appeared as an honest node
-// failing composition. The 100% measurement behind treating composition as
-// required was taken on the other three.
+// failing composition.
+//
+// 🔴 STYLE IS GONE ENTIRELY. It was a required check and honest nodes kept
+// failing it: a plain SD checkpoint draws the right subject in the right
+// framing and simply does not render the asked-for art style. Requiring it
+// measured the checkpoint rather than the effort. The slot stays in slots.json
+// so an older file still parses, but nothing reads it.
 type slotTable struct {
 	ArticleOverride map[string]string `json:"_article_override"`
 	// EnvironmentPrep is the preposition per environment value. Default "in";
@@ -64,14 +69,21 @@ type slotTable struct {
 	//
 	// Broken English is not cosmetic here — CLIP scores a malformed caption
 	// unpredictably, so it would show up as an honest node failing.
-	EnvironmentPrep    map[string]string `json:"_environment_prep"`
-	EnvironmentPrepDef string            `json:"_environment_prep_default"`
-	Subject         map[string][]string `json:"subject"`
-	Style           map[string][]string `json:"style"`
-	Color           map[string][]string `json:"color"`
-	Environment     map[string][]string `json:"environment"`
-	Composition     []string            `json:"composition"`
+	EnvironmentPrep    map[string]string   `json:"_environment_prep"`
+	EnvironmentPrepDef string              `json:"_environment_prep_default"`
+	Subject            map[string][]string `json:"subject"`
+	Style              map[string][]string `json:"style"`
+	Color              map[string][]string `json:"color"`
+	Environment        map[string][]string `json:"environment"`
+	Composition        []string            `json:"composition"`
 }
+
+// frontComposition is the framing every image order asks for.
+//
+// A constant rather than a slot draw: see NewImageOrder. Worded the way an SD
+// prompt words it, and the same words go into the caption CLIP scores, so the
+// two cannot drift apart.
+const frontComposition = "front view"
 
 // slots is the table, parsed once at startup. A malformed embed is a build-time
 // mistake, not a runtime condition, so it panics rather than degrading.
@@ -186,15 +198,12 @@ func sortStrings(s []string) {
 
 // NewImageOrder draws one image probe.
 //
-// The prompt carries four tags — colour+subject, environment, composition,
-// style. Four is deliberate: adding more dilutes attention and each element is
-// followed LESS well, so a longer order makes an honest node look worse.
+// The prompt carries three tags — colour+subject, environment, composition.
+// Short is deliberate: adding more dilutes attention and each element is
+// followed LESS well, so a longer order makes an honest node look worse. It was
+// four until style came out.
 func NewImageOrder(rng *rand.Rand) (ImageOrder, bool) {
 	subject, subjectAlts, ok := drawWithAlternatives(slots.Subject, rng)
-	if !ok {
-		return ImageOrder{}, false
-	}
-	style, styleAlts, ok := drawWithAlternatives(slots.Style, rng)
 	if !ok {
 		return ImageOrder{}, false
 	}
@@ -202,30 +211,40 @@ func NewImageOrder(rng *rand.Rand) (ImageOrder, bool) {
 	if !ok {
 		return ImageOrder{}, false
 	}
-	env, envAlts, ok := drawWithAlternatives(slots.Environment, rng)
-	if !ok {
-		return ImageOrder{}, false
-	}
-	// Composition has no categories: its values are already far apart, so the
-	// alternatives are simply the others.
-	ci := rng.Intn(len(slots.Composition))
-	comp := slots.Composition[ci]
-	var compAlts []string
-	for i, c := range slots.Composition {
-		if i != ci && len(compAlts) < 2 {
-			compAlts = append(compAlts, c)
-		}
-	}
+	// 🔴 COMPOSITION IS FIXED, NOT DRAWN. Every order asks for a front view.
+	//
+	// The alternatives still vary the caption, so CLIP is still made to choose
+	// and the check still decides something. What is given up is that a node
+	// knows the answer in advance — which costs little, because the SUBJECT is
+	// what a cached picture cannot satisfy, and that is still drawn per shot.
+	//
+	// What is bought is that honest nodes stop failing on framing. "aerial view"
+	// in particular is a shot a plain checkpoint often will not produce, and it
+	// was sinking whole rounds.
+	comp := frontComposition
+	compAlts := []string{"close-up", "wide shot"}
 
 	order := ImageOrder{
-		// Tag form. Colour rides on the subject because that is how it is
-		// written in an SD prompt, and separating them ("red, fox") reads as
-		// two subjects.
+		// 🔴 THE COLOUR IS ON THE BACKGROUND, NOT THE SUBJECT.
+		//
+		// It used to ride the subject ("an amber crocodile") because that is how
+		// an SD prompt is written. It measured at 66% on correct images and was
+		// never required: SD refuses an unnatural subject colour outright as
+		// often as it obeys, and when it obeys it tends to bleed the colour into
+		// the background anyway.
+		//
+		// A background colour has neither problem. A flat backdrop is the easiest
+		// thing in the prompt to satisfy, it fills most of the frame, and CLIP
+		// reads it far more reliably than a place ("a parking lot") that the
+		// subject stands in front of and half occludes.
+		//
+		// So the slot is still drawn from the same vocabulary, and it is now the
+		// candidate for the second required check — once the clip manifest
+		// declares a param to carry it. See requiredLabels.
 		Prompt: strings.Join([]string{
-			color + " " + subject,
-			env,
+			subject,
+			color + " background",
 			comp,
-			style,
 		}, ", "),
 	}
 
@@ -241,11 +260,6 @@ func NewImageOrder(rng *rand.Rand) (ImageOrder, bool) {
 			Alternatives: []string{"a photo of " + np(subjectAlts[0]), "a photo of " + np(subjectAlts[1])},
 		},
 		{
-			Label:        "style",
-			Expect:       article(style) + " " + style,
-			Alternatives: []string{article(styleAlts[0]) + " " + styleAlts[0], article(styleAlts[1]) + " " + styleAlts[1]},
-		},
-		{
 			Label:  "composition",
 			Expect: article(comp) + " " + comp + " of " + np(subject),
 			Alternatives: []string{
@@ -253,27 +267,30 @@ func NewImageOrder(rng *rand.Rand) (ImageOrder, bool) {
 				article(compAlts[1]) + " " + compAlts[1] + " of " + np(subject),
 			},
 		},
-		// colour and environment are recorded but NOT required. A correct image
-		// scores about 66% on background colour, and SD often refuses an
-		// unnatural colour outright or bleeds it into the background — failing
-		// an honest node on either would be the worst outcome available.
+		// composition, colour and environment are recorded but NOT required.
+		// clipRun only sends the required labels, so none of these reach CLIP —
+		// they exist so a failure can be investigated against what was actually
+		// ordered, and so the shape is ready if a label is promoted later. See
+		// requiredLabels.
 		{
-			Label:        "color",
-			Expect:       article(color) + " " + color + " " + subject,
-			Alternatives: []string{article(colorAlts[0]) + " " + colorAlts[0] + " " + subject, article(colorAlts[1]) + " " + colorAlts[1] + " " + subject},
-		},
-		{
-			// 🔴 Drawn, not hardcoded. Fixed alternatives ("on a beach", "in a
-			// kitchen") collide the moment the environment slot yields one of
-			// them, and CLIP is then asked to choose between two identical
-			// captions — a check that decides nothing while looking like it did.
-			Label:  "environment",
-			Expect: inEnvironment(np(subject), env),
+			// Phrased as the picture, not as the object: "on a red background"
+			// is what CLIP is being asked to see, and the alternatives differ in
+			// exactly that one word.
+			Label:  "background",
+			Expect: np(subject) + " on " + article(color) + " " + color + " background",
 			Alternatives: []string{
-				inEnvironment(np(subject), envAlts[0]),
-				inEnvironment(np(subject), envAlts[1]),
+				np(subject) + " on " + article(colorAlts[0]) + " " + colorAlts[0] + " background",
+				np(subject) + " on " + article(colorAlts[1]) + " " + colorAlts[1] + " background",
 			},
 		},
+		// 🔴 ENVIRONMENT IS NO LONGER ORDERED. A place ("a parking lot") competes
+		// with the background colour for the same pixels, and asking for both
+		// gave SD two contradictory instructions about what is behind the
+		// subject. The colour is the one that can be checked, so the place went.
+		//
+		// inEnvironment and the environment slot are kept: the vocabulary and
+		// its per-value prepositions are the expensive part, and this is a
+		// choice about what to ORDER, not a decision that places are useless.
 	}
 	return order, true
 }
@@ -308,5 +325,5 @@ func PrintImageOrders(n int) {
 		}
 		fmt.Printf("[%d] %s\n", i+1, o)
 	}
-	fmt.Println("* = required (subject / style / composition). colour and environment are recorded, not enforced.")
+	fmt.Println("* = required (subject / background). composition is recorded, not enforced.")
 }

@@ -63,7 +63,7 @@ func OpenStore(path string) (*Store, error) {
 			return nil, fmt.Errorf("probe db dir: %w", err)
 		}
 	}
-	db, err := sql.Open("sqlite", path+"?_journal=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", path+sqlitePragmas)
 	if err != nil {
 		return nil, fmt.Errorf("open probe db: %w", err)
 	}
@@ -597,3 +597,15 @@ func (s *Store) SightingsToday(dayStart time.Time) ([]NodeSighting, error) {
 	}
 	return out, rows.Err()
 }
+
+// sqlitePragmas turns on WAL and a busy timeout.
+//
+// 🔴 THE SPELLING IS DRIVER-SPECIFIC AND THE WRONG ONE FAILS SILENTLY. This was
+// written as "?_journal=WAL&_busy_timeout=5000", which is mattn/go-sqlite3's
+// syntax. We use modernc.org/sqlite, which reads "?_pragma=name(value)" and
+// IGNORES anything else — no error, no warning. The result was journal_mode
+// stuck on "delete" and busy_timeout on 0, so every reader blocked every writer
+// and any contention returned SQLITE_BUSY instantly instead of waiting.
+//
+// Verify with: SELECT * FROM pragma_busy_timeout, pragma_journal_mode.
+const sqlitePragmas = "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"

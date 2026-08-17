@@ -16,8 +16,8 @@ import (
 func fullChecks() []Check {
 	return []Check{
 		{Label: "subject", Expect: "a photo of a fox", Alternatives: []string{"a photo of a banjo", "a photo of a jacket"}},
-		{Label: "style", Expect: "an oil painting", Alternatives: []string{"a pencil sketch", "a polaroid photo"}},
-		{Label: "composition", Expect: "a close-up of a fox", Alternatives: []string{"a wide shot of a fox", "an aerial view of a fox"}},
+		{Label: "background", Expect: "a fox on a red background", Alternatives: []string{"a fox on a blue background", "a fox on a green background"}},
+		{Label: "composition", Expect: "a front view of a fox", Alternatives: []string{"a close-up of a fox", "a wide shot of a fox"}},
 	}
 }
 
@@ -58,13 +58,13 @@ func TestRequiredPass(t *testing.T) {
 			// nodes, so the top-level false is ignored.
 			name:   "optional failure does not sink the image",
 			pass:   false,
-			checks: map[string]bool{"subject": true, "style": true, "composition": true, "color": false},
+			checks: map[string]bool{"subject": true, "background": true, "composition": false},
 			want:   true,
 		},
 		{
 			name:   "required failure fails",
 			pass:   false,
-			checks: map[string]bool{"subject": false, "style": true, "composition": true},
+			checks: map[string]bool{"subject": false, "background": true},
 			want:   false,
 		},
 		{
@@ -72,7 +72,7 @@ func TestRequiredPass(t *testing.T) {
 			// validator answering `{}` mints tickets for everything.
 			name:   "no required checks is not a pass",
 			pass:   true,
-			checks: map[string]bool{"color": true},
+			checks: map[string]bool{"composition": true},
 			want:   false,
 		},
 	}
@@ -137,7 +137,7 @@ func newLocalValidator(t *testing.T, entries []string, h http.HandlerFunc) *Vali
 // yes" and adding judges would raise the pass rate.
 func TestFailVerdictDoesNotFailOver(t *testing.T) {
 	var submits []string
-	body := verdictBody(t, false, map[string]bool{"subject": false, "style": true, "composition": true})
+	body := verdictBody(t, false, map[string]bool{"subject": false, "background": true})
 	v := newLocalValidator(t, []string{"this", "this"},
 		stationStub(t, &submits, func(string) string { return body }))
 
@@ -156,7 +156,7 @@ func TestFailVerdictDoesNotFailOver(t *testing.T) {
 // A validator that cannot judge is a different thing, and does fail over.
 func TestBrokenValidatorFailsOver(t *testing.T) {
 	var paths []string
-	good := verdictBody(t, true, map[string]bool{"subject": true, "style": true, "composition": true})
+	good := verdictBody(t, true, map[string]bool{"subject": true, "background": true})
 	v := newLocalValidator(t, []string{"this/broken", "this/good"},
 		stationStub(t, &paths, func(p string) string {
 			if strings.Contains(p, "broken") {
@@ -241,7 +241,7 @@ func TestClipRunUsesManifestParamNames(t *testing.T) {
 	}
 	// colour and environment have no manifest slot; sending them would do
 	// nothing, and they never decide a verdict anyway.
-	for _, k := range []string{"color", "environment"} {
+	for _, k := range []string{"composition", "color", "environment"} {
 		if _, present := run[k]; present {
 			t.Errorf("run carries %q, which the manifest does not declare", k)
 		}
@@ -251,9 +251,24 @@ func TestClipRunUsesManifestParamNames(t *testing.T) {
 // A missing required check must stop the call, not produce a verdict that looks
 // complete while one axis was never examined.
 func TestClipRunRejectsAnIncompleteOrder(t *testing.T) {
-	only := []Check{{Label: "subject", Expect: "a photo of a fox", Alternatives: []string{"a photo of a banjo", "a photo of a jacket"}}}
-	if _, err := clipRun("x", only); err == nil {
-		t.Error("clipRun accepted an order with no style or composition check")
+	// Everything the order carries EXCEPT a required label. The validator would
+	// happily answer on what it got, and the verdict would look complete while
+	// the one axis that decides was never examined.
+	noSubject := []Check{
+		{Label: "composition", Expect: "a front view of a fox", Alternatives: []string{"a close-up of a fox", "a wide shot of a fox"}},
+		{Label: "background", Expect: "a fox on a red background", Alternatives: []string{"a fox on a blue background", "a fox on a green background"}},
+	}
+	if _, err := clipRun("x", noSubject); err == nil {
+		t.Error("clipRun accepted an order with no subject check")
+	}
+
+	// And the mirror: the required set is the whole bar, so an order carrying it
+	// is complete even though other labels are absent.
+	if _, err := clipRun("x", []Check{
+		{Label: "subject", Expect: "a photo of a fox", Alternatives: []string{"a photo of a banjo", "a photo of a jacket"}},
+		{Label: "background", Expect: "a fox on a red background", Alternatives: []string{"a fox on a blue background", "a fox on a green background"}},
+	}); err != nil {
+		t.Errorf("clipRun refused an order that carries every required label: %v", err)
 	}
 }
 
@@ -264,7 +279,7 @@ func TestClipRunRejectsAnIncompleteOrder(t *testing.T) {
 // simply never fetched.
 func TestVerdictIsPolledNotTakenFromTheSubmitReply(t *testing.T) {
 	var legs []string
-	good := verdictBody(t, true, map[string]bool{"subject": true, "style": true, "composition": true})
+	good := verdictBody(t, true, map[string]bool{"subject": true, "background": true})
 	v := newLocalValidator(t, []string{"this"}, func(w http.ResponseWriter, r *http.Request) {
 		legs = append(legs, r.Method+" "+r.URL.Path)
 		switch {

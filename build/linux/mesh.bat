@@ -41,6 +41,11 @@ set "OUT=build\linux\out-mesh"
 if exist "%OUT%" rmdir /s /q "%OUT%"
 mkdir "%OUT%"
 
+REM build\out\linux\ is the bare-binary tree an operator copies from.
+REM Refreshed on every packaged build so it cannot go stale behind the zips.
+set "FLAT=build\out\linux"
+if not exist "%FLAT%" mkdir "%FLAT%"
+
 echo === iSANN mesh build   v%VER%   (linux/amd64) ===
 echo.
 
@@ -49,6 +54,8 @@ set "STN=%OUT%\station"
 mkdir "%STN%\bin"
 mkdir "%STN%\conf"
 go build -ldflags "%LDFLAGS%" -o "%STN%\bin\station" ./cmd/station/
+if errorlevel 1 goto :error
+copy /Y "%STN%\bin\station" "%FLAT%\" >nul
 if errorlevel 1 goto :error
 REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째 conf 를 추가하는 순간
 REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
@@ -63,6 +70,8 @@ echo [2/3] chatbot (mesh, tar.gz)...
 set "CBT=%OUT%\chatbot"
 mkdir "%CBT%\bin"
 go build -ldflags "-s -w" -o "%CBT%\bin\chatbot" ./cmd/chatbot/
+if errorlevel 1 goto :error
+copy /Y "%CBT%\bin\chatbot" "%FLAT%\" >nul
 if errorlevel 1 goto :error
 xcopy /E /I /Y /Q "apps\chatbot\conf" "%CBT%\conf" >nul
 if errorlevel 1 goto :error
@@ -82,6 +91,8 @@ set "CTL=%OUT%\control"
 mkdir "%CTL%\bin"
 mkdir "%CTL%\conf"
 go build -ldflags "%LDFLAGS%" -o "%CTL%\bin\control" ./cmd/control/
+if errorlevel 1 goto :error
+copy /Y "%CTL%\bin\control" "%FLAT%\" >nul
 if errorlevel 1 goto :error
 pushd web\control
 if not exist "node_modules" call npm install
@@ -108,6 +119,8 @@ set "PRB=%OUT%\probe"
 mkdir "%PRB%\bin"
 mkdir "%PRB%\conf"
 go build -ldflags "%LDFLAGS%" -o "%PRB%\bin\probe" ./cmd/probe/
+if errorlevel 1 goto :error
+copy /Y "%PRB%\bin\probe" "%FLAT%\" >nul
 if errorlevel 1 goto :error
 REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째 conf 를 추가하는 순간
 REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.

@@ -70,12 +70,48 @@ type Judgement struct {
 
 // requiredLabels are the checks that must pass for an image to count.
 //
-// subject, style and composition separate cleanly (measured at 86.5%, 99.6% and
-// 100.0%). Colour and environment do not — a correct image scores 66% on
-// background colour, and SD often refuses an unnatural colour outright or
-// bleeds it into the background. Requiring those would fail honest nodes, so
-// they are recorded as signal and not used to decide.
-var requiredLabels = map[string]bool{"subject": true, "style": true, "composition": true}
+// subject and background decide. Composition is drawn, ordered and recorded,
+// but no longer gates a ticket.
+//
+// 🔴 background REPLACED the old subject-colour check, and the difference is
+// where the paint goes. "an amber crocodile" measured 66% on correct images:
+// SD refuses an unnatural subject colour about as often as it obeys, and when
+// it obeys it bleeds the colour into the background anyway. "on an amber
+// background" has neither problem — a flat backdrop is the easiest thing in a
+// prompt to satisfy, it fills most of the frame, and CLIP reads it far more
+// reliably than a place the subject stands in front of and half occludes.
+//
+// ⚠️ THE CLIP ENGINE MUST DECLARE THE PARAM. The station maps run params
+// through the manifest's body template and DROPS anything undeclared, without
+// an error (see clipRun). If `background`, `background-alt` and
+// `background-alt2` are not in the clip manifest, this check does not happen
+// and every image passes on subject alone — silently. Verify on a real verdict
+// that a `background` entry comes back in `checks` before trusting it.
+//
+// 🔴 STYLE AND COMPOSITION WERE REQUIRED AND ARE NOT ANY MORE. Both measured
+// well in calibration, but calibration ran against images a capable model had
+// produced. In the field an honest node with a plain checkpoint draws the right
+// subject and simply does not render the asked-for art style or framing, and
+// whole shots were failing on that alone — style at 0.03, composition at 0.06
+// on images whose subject was correct.
+//
+// Style is gone from the order entirely. Composition is still asked for in the
+// prompt (always a front view now, never the "aerial view" a plain checkpoint
+// will not produce) and still recorded, but no longer scored.
+//
+// ⚠️ WHAT THIS COSTS. Subject is the only axis left, so an image probe now
+// asks one question instead of three. Subject is drawn from 535 values and
+// changes every shot, which is what keeps a cached picture from answering it —
+// but a node that pre-generated one image per subject would pass, and nothing
+// here would notice. The check is a deterrent now, not a proof.
+//
+// 🔴 COLOUR CANNOT TAKE THE EMPTY SLOT, AND THE REASON IS NOT TASTE. The clip
+// manifest declares flat subject/style/composition params and nothing else, so
+// a colour check is DROPPED on the way out (see clipRun) — the verdict comes
+// back without it and the image passes on subject alone. Silently. Promoting
+// colour here would weaken the check while looking like it tightened it.
+// Declaring the params on the clip engine is the prerequisite, not this line.
+var requiredLabels = map[string]bool{"subject": true, "background": true}
 
 // RequiredPass reports whether the checks that matter passed.
 //
@@ -169,9 +205,9 @@ func (v *Validator) Validate(imageB64 string, checks []Check) (Judgement, error)
 // BuildBody drops every field and the validator receives an empty image with
 // empty expectations. Nothing errors on the way; it just cannot judge.
 //
-// Only the three required labels travel. colour and environment are recorded
-// for humans but never decide a verdict (see slots.go), and the manifest has no
-// slot for them — sending them would silently do nothing.
+// Only the required labels travel. Composition is recorded for humans but never
+// decides a verdict (see slots.go), so sending it would ask the validator to
+// judge something nobody reads.
 func clipRun(imageB64 string, checks []Check) (map[string]any, error) {
 	run := map[string]any{
 		"image": imageB64,

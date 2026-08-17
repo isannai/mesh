@@ -147,8 +147,8 @@ type Config struct {
 	// the whole submit → collect → judge path still runs — only the RV lookup
 	// and the NAT hop are skipped, and neither is what the image track is
 	// exercising. Turn it on to try the pipeline; leave it off in production.
-	FireAtSelf bool `json:"fire_at_self"`
-	DB          string `json:"db"`
+	FireAtSelf bool   `json:"fire_at_self"`
+	DB         string `json:"db"`
 	// QueueLowWater is the refill threshold: when a category has fewer than
 	// this many unused questions left, another batch is generated. Questions
 	// are consumed once and discarded (that is what makes a cache attack
@@ -175,8 +175,8 @@ const defaultIsanndURL = "http://127.0.0.1:8443"
 // DefaultConfig returns the settings the prober runs with when nothing is set.
 func DefaultConfig() Config {
 	return Config{
-		RefreshSec:       3600,
-		FireIntervalSec:  60,
+		RefreshSec:      3600,
+		FireIntervalSec: 60,
 		// 3 · 6 · 9 · 12 · 15 hours, written out so the file that ships is the
 		// same shape an operator edits.
 		ScheduleSec:      []float64{10800, 21600, 32400, 43200, 54000},
@@ -196,16 +196,16 @@ func DefaultConfig() Config {
 		// give up before a genuinely short queue had drained. Ten covers several
 		// jobs while staying negligible against a schedule whose steps are hours
 		// apart.
-		DeferMax:      10,
+		DeferMax: 10,
 		// 🔴 ImageSizes stays EMPTY by default. Seeding it here overrode the
 		// architecture logic entirely — imageParams checks the config first, so
 		// a default value meant every node got the same list no matter what it
 		// declared, and the sd15/SDXL split never ran at all.
-		ImageSizes: nil,
-		DB:               "probe.db",
-		QueueLowWater:    10,
-		ObservationDays:  30,
-		QuestionFanout:   5,
+		ImageSizes:      nil,
+		DB:              "db/probe.db",
+		QueueLowWater:   10,
+		ObservationDays: 30,
+		QuestionFanout:  5,
 	}
 	// Generators / Clips stay nil here on purpose. Their defaults differ from
 	// "empty" and are applied in LoadConfig, after the file has had its say —
@@ -471,10 +471,25 @@ type Prober struct {
 	// runs at a time. Atomic because Refresh (one goroutine) starts it and the
 	// generator goroutine clears it.
 	refilling atomic.Bool
+	// genRetryAt is when a prober in the arithmetic fallback may try a writer
+	// again, and genBackoff is the gap it will use. Refills otherwise ride the
+	// directory refresh, which is hourly in production — far too long to sit on
+	// arithmetic after a cold start.
+	//
+	// Both are touched only from the firing goroutine. genFailures is not, which
+	// is why it is atomic: refillQueue writes it from a background goroutine.
+	genRetryAt time.Time
+	genBackoff time.Duration
+
+	// 🔴 ATOMIC BECAUSE TWO GOROUTINES TOUCH IT. refillQueue runs in the
+	// background (startRefill) and writes it; the firing loop reads it to decide
+	// whether to retry. It was a plain int while only the background goroutine
+	// looked at it, and the retry is what made that unsafe.
+	//
 	// genFailures counts consecutive generation failures. After a few, the
 	// prober stops asking every hour: an engine that is not there will not be
 	// there next hour either, and the log line is the same one every time.
-	genFailures int
+	genFailures atomic.Int32
 }
 
 // roundStats tallies one firing round for the summary line.
@@ -748,6 +763,34 @@ func (p *Prober) Refresh() {
 // One refill at a time: a second one starting while the first is still waiting
 // on the engine would queue work behind it for no benefit. If the previous
 // round is still going, this one is skipped and the next hour picks it up.
+// genRetryEvery is the FIRST gap a prober stuck on arithmetic waits before
+// trying a writer again. It doubles from there — see nextGenBackoff.
+//
+// A minute, matching the fire tick: the case this exists for is a boot that
+// raced the hole punch, and that resolves in seconds.
+const genRetryEvery = time.Minute
+
+// nextGenBackoff doubles the retry gap, capped at the refresh period.
+//
+// The cap is what keeps a dead writer from being expensive: once the gap
+// reaches the directory refresh, retrying costs exactly what the old
+// refresh-driven refill cost, and the fallback has stopped being a special
+// case. Below the cap the sequence is 1, 2, 4, 8… minutes, so a transient
+// failure is picked up almost immediately and a permanent one fades out.
+func nextGenBackoff(current, refresh time.Duration) time.Duration {
+	if refresh < genRetryEvery {
+		refresh = genRetryEvery // a very short refresh is still the ceiling
+	}
+	next := genRetryEvery
+	if current > 0 {
+		next = current * 2
+	}
+	if next > refresh {
+		next = refresh
+	}
+	return next
+}
+
 func (p *Prober) startRefill() {
 	if !p.refilling.CompareAndSwap(false, true) {
 		return
@@ -783,16 +826,25 @@ func (p *Prober) refillQueue() {
 	// a narrower one: math is half the intended mix anyway, and it is the only
 	// category whose answers are certain, so it never needs a re-check panel.
 	if !p.gen.HasEngine() {
-		if p.genFailures == 0 {
+		if p.genFailures.Load() == 0 {
 			log.Printf("[probe] no question writers configured (`generators`) — arithmetic questions only")
-			p.genFailures = genFailureLimit // say it once, not every hour
+			p.genFailures.Store(genFailureLimit) // say it once, not every hour
 		}
 		return
 	}
-	if p.genFailures >= genFailureLimit {
-		return // an engine that was not there an hour ago is still not there
-	}
-
+	// 🔴 NO EARLY RETURN ON genFailures. It used to stop trying here, and that
+	// was a one-way door: the counter only clears on a success, and a success
+	// needs an attempt. One bad minute pinned the prober to arithmetic until
+	// somebody restarted it.
+	//
+	// The failure that triggered it is not even a broken engine. The prober
+	// refills the moment it boots, before isannd has dialled the writer's node,
+	// so the first call gets a 502 from an unfinished hole punch. Three of those
+	// and the day was over.
+	//
+	// genFailures now gates the LOG, not the attempt: the retry costs one round
+	// trip per refresh (hourly in production) and buys back the whole category
+	// mix as soon as the peer answers.
 	failed := false
 	for _, spec := range genSpecs {
 		if depth[spec.cat] >= p.cfg.QueueLowWater {
@@ -815,13 +867,21 @@ func (p *Prober) refillQueue() {
 		if added < len(qs) {
 			log.Printf("[probe] %s: %d new, %d already asked", spec.cat, added, len(qs)-added)
 		}
-		p.genFailures = 0 // one success clears the count
+		// One success clears the count. Announced when it ends a fallback, so the
+		// recovery is as visible in the log as the failure was.
+		if p.genFailures.Load() >= genFailureLimit {
+			log.Printf("[probe] question generation recovered — %s questions are back", spec.cat)
+		}
+		p.genFailures.Store(0)
 	}
 	if failed {
-		p.genFailures++
-		if p.genFailures >= genFailureLimit {
-			log.Printf("[probe] question generation has failed %d times — falling back to arithmetic only (check `generators`: %v)",
-				p.genFailures, p.gen.Writers())
+		n := p.genFailures.Add(1)
+		// Said once, on the crossing. Repeating it every retry would bury the
+		// round lines, and the state it describes does not change until a
+		// success clears the counter — which is logged in its own right.
+		if n == genFailureLimit {
+			log.Printf("[probe] question generation has failed %d times — arithmetic only until a writer answers (check `generators`: %v)",
+				n, p.gen.Writers())
 		}
 	}
 }
@@ -873,6 +933,32 @@ func (p *Prober) FireRound() {
 	// changes the fact that a node drew something for us and the station will
 	// drop it after DoneTTL. Gating this behind the fire checks would strand
 	// those rows open forever — and an open row keeps its node ineligible.
+	// 🔴 COLD START RECOVERY. The prober refills the moment it boots, before
+	// isannd has dialled the writer's node, so the first call meets an
+	// unfinished hole punch and comes back 502. Refills otherwise only happen on
+	// the directory refresh, so that one-second failure would cost a full
+	// refresh period — an hour in production — of arithmetic-only questions.
+	//
+	// While in the fallback, try again on the fire tick instead. It costs one
+	// round trip a minute at worst, the log for it is already suppressed, and it
+	// turns "an hour" into "the next minute".
+	if p.genFailures.Load() < genFailureLimit {
+		p.genBackoff = 0 // out of the fallback: the next cold start starts fresh
+	} else if p.gen.HasEngine() && now.After(p.genRetryAt) {
+		// 🔴 DOUBLING, NOT A FIXED MINUTE. A boot that raced the hole punch
+		// recovers on the first retry, so the first gap wants to be short. A
+		// writer that is genuinely gone would otherwise cost a dial, a punch
+		// attempt and a timeout every minute for as long as it stays down —
+		// 1440 of them a day, each one asking the RV to coordinate a punch to a
+		// node that is not there.
+		//
+		// The ceiling is the refresh period, so a dead writer settles back to
+		// exactly the cadence it had before any of this existed.
+		p.genBackoff = nextGenBackoff(p.genBackoff, time.Duration(p.cfg.RefreshSec)*time.Second)
+		p.genRetryAt = now.Add(p.genBackoff)
+		p.startRefill()
+	}
+
 	p.collectRound(now, &stats)
 	defer func() {
 		if stats.fired.Load() > 0 || stats.answered.Load() > 0 {

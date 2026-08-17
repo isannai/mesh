@@ -24,7 +24,7 @@
   "clip_service": "clip-api",
 
   "question_fanout": 5,
-  "db": "probe.db",
+  "db": "db/probe.db",
   "queue_low_water": 10,
   "observation_days": 30,
   "signer": {

@@ -70,8 +70,12 @@ func TestCompositionHasNoNearSynonyms(t *testing.T) {
 			t.Errorf("composition %q is indistinguishable from close-up", c)
 		}
 	}
-	if len(slots.Composition) < 3 {
-		t.Errorf("composition needs 3 values so a pick has two alternatives, got %d", len(slots.Composition))
+	// The slot list is no longer drawn from — every order asks for a front view
+	// (frontComposition) — but it still has to hold the alternatives the caption
+	// is scored against, and near-synonyms there would break the check just as
+	// badly as they did when it was drawn.
+	if len(slots.Composition) < 2 {
+		t.Errorf("composition needs alternatives to score against, got %d", len(slots.Composition))
 	}
 }
 
@@ -115,10 +119,22 @@ func TestOrderCarriesRequiredChecks(t *testing.T) {
 			t.Errorf("order is missing the required check %q", label)
 		}
 	}
-	// Four tags: colour+subject, environment, composition, style. More dilutes
-	// attention and each element is followed LESS well.
-	if n := strings.Count(o.Prompt, ",") + 1; n != 4 {
-		t.Errorf("prompt has %d tags, want 4: %q", n, o.Prompt)
+	// Three tags: colour+subject, environment, composition. More dilutes
+	// attention and each element is followed LESS well. It was four until style
+	// came out.
+	if n := strings.Count(o.Prompt, ",") + 1; n != 3 {
+		t.Errorf("prompt has %d tags, want 3: %q", n, o.Prompt)
+	}
+	// 🔴 Style must be gone from the ORDER, not just from requiredLabels. Left
+	// in the prompt it would still be asked for and still missed, and left as a
+	// scored check it would still be stored as a failure nobody acts on.
+	if strings.Contains(o.Prompt, "painting") || seen["style"] {
+		t.Errorf("style survived: prompt=%q checks=%v", o.Prompt, seen)
+	}
+	// Always the same framing, so a node cannot be failed for a shot its
+	// checkpoint will not produce.
+	if !strings.Contains(o.Prompt, frontComposition) {
+		t.Errorf("prompt does not ask for a %s: %q", frontComposition, o.Prompt)
 	}
 }
 
