@@ -27,6 +27,14 @@ type Target struct {
 	Node    rvnodes.Node
 	Service rvnodes.Service
 	Slash24 string
+	// Probe is the X-ISANN-Probe header for THIS node: the group it is in,
+	// the merkle path to the root it holds, and a signature naming it.
+	//
+	// Per-target rather than per-group because the signature covers the
+	// recipient — see bundle.go. Empty when this prober holds no assignment,
+	// in which case the shot goes out unproven and the node treats it as any
+	// other anonymous request.
+	Probe string
 }
 
 // eligible filters the directory down to nodes worth firing at.

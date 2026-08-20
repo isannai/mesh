@@ -248,7 +248,8 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, deferred int, stats *round
 		Service:     t.Service.Name,
 		Model:       t.Service.Model,
 		ModelHash:   t.Service.ModelHash,
-		Appointment: p.appt.Token,
+		AssignEpoch: p.assign.Epoch,
+		AssignRoot:  p.assign.Root,
 		Deferred:    deferred,
 	}
 
@@ -264,7 +265,7 @@ func (p *Prober) fireImageOne(t Target, o ImageOrder, deferred int, stats *round
 	// scored — the picture would arrive with nothing to compare it against.
 	sh.OrderJSON = encodeOrder(o)
 
-	res, err := p.firer.SubmitRun(t.Node.ID, t.Service.Name, run)
+	res, err := p.firer.SubmitRunProbe(t.Node.ID, t.Service.Name, run, t.Probe)
 	sh.JobID = res.JobID
 	sh.SubmitStatus = res.Status
 	sh.Outcome = res.Outcome

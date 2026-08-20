@@ -12,7 +12,7 @@ package main
 // local isannd node-bridge, which does the RV lookup, the hole punch and the
 // HTTP/3 hop.
 //
-// Without an appointment it idles: no directory fetch, no firing, one log line.
+// Without a group assignment it idles: no directory fetch, no firing, one log line.
 // That is the expected state for a node that merely has the mesh installed.
 
 import (

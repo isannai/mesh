@@ -298,7 +298,7 @@ func (v *Validator) askLocal(service string, run map[string]any) ([]byte, error)
 		return nil, err
 	}
 	jobsBase := v.firer.IsanndURL + "/internal/api/infer/svc/" + url.PathEscape(service) + "/v1/jobs"
-	body, code, err := v.firer.post(jobsBase, payload, v.Deadline)
+	body, code, err := v.firer.post(jobsBase, payload, v.Deadline, "") // ally call, not a shot: nothing to prove
 	if err != nil {
 		return nil, fmt.Errorf("validate: %w", err)
 	}

@@ -216,7 +216,7 @@ func (f *Firer) Submit(t Target, q Question) (SubmitResult, error) {
 			fmt.Errorf("service %q declares no prompt parameter", t.Service.Name)
 	}
 
-	return f.SubmitRun(t.Node.ID, t.Service.Name, run)
+	return f.SubmitRunProbe(t.Node.ID, t.Service.Name, run, t.Probe)
 }
 
 // SubmitRun posts an arbitrary run block to one node's service.
@@ -226,12 +226,23 @@ func (f *Firer) Submit(t Target, q Question) (SubmitResult, error) {
 // difference between asking a node a quiz question and asking an ally to write
 // twenty is what goes in the run map.
 func (f *Firer) SubmitRun(nodeID, svc string, run map[string]any) (SubmitResult, error) {
+	return f.SubmitRunProbe(nodeID, svc, run, "")
+}
+
+// SubmitRunProbe is SubmitRun with a probe proof attached.
+//
+// Split rather than folded into SubmitRun because the two kinds of call are
+// genuinely different: a SHOT is a prober checking a node it was assigned, and
+// carries proof of that; an ALLY call (question generation, clip validation)
+// is this prober asking a friend for work and proves nothing. Threading an
+// empty string through the ally paths would invite someone to fill it in.
+func (f *Firer) SubmitRunProbe(nodeID, svc string, run map[string]any, probe string) (SubmitResult, error) {
 	payload, err := json.Marshal(map[string]any{"service": svc, "run": run})
 	if err != nil {
 		return SubmitResult{Outcome: OutcomeRefused}, err
 	}
 	endpoint := f.nodeBase(nodeID) + "/svc/" + url.PathEscape(svc) + "/v1/jobs"
-	body, code, err := f.post(endpoint, payload, 30*time.Second)
+	body, code, err := f.post(endpoint, payload, 30*time.Second, probe)
 	if err != nil {
 		return SubmitResult{Outcome: OutcomeRefused}, err
 	}
@@ -617,12 +628,20 @@ func (f *Firer) get(endpoint string, timeout time.Duration) ([]byte, int, error)
 	return f.do(req, timeout)
 }
 
-func (f *Firer) post(endpoint string, payload []byte, timeout time.Duration) ([]byte, int, error) {
+// post sends a job. probe, when non-empty, carries the prober's proof.
+//
+// 🔴 The proof is a HEADER and the body is untouched, so the request the node
+// sees is byte-identical to one from any other caller. A probe that changed the
+// payload would stop measuring what an ordinary user experiences.
+func (f *Firer) post(endpoint string, payload []byte, timeout time.Duration, probe string) ([]byte, int, error) {
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if probe != "" {
+		req.Header.Set(ProbeHeader, probe)
+	}
 	return f.do(req, timeout)
 }
 

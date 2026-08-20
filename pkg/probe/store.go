@@ -110,7 +110,9 @@ CREATE TABLE IF NOT EXISTS shot (
   answer_raw        TEXT,
   outcome           TEXT    NOT NULL,
   verdict           TEXT,
-  appointment       TEXT,
+  appointment       TEXT,   -- retired: prober appointments are gone (see assign_epoch/assign_root)
+  assign_epoch      INTEGER,
+  assign_root       TEXT,
   deferred          INTEGER, -- rounds we held off before firing this one
   order_json        TEXT     -- image orders only: the checks a later round judges against
 );
@@ -146,6 +148,11 @@ CREATE INDEX IF NOT EXISTS q_text        ON question(category, q);
 var addedColumns = []string{
 	`ALTER TABLE shot ADD COLUMN deferred INTEGER`,
 	`ALTER TABLE shot ADD COLUMN order_json TEXT`,
+	// Provenance moved from an appointment token to the slot a shot was fired
+	// under. The old column stays: rewriting rows already recorded would
+	// destroy the only record of what those shots were fired under.
+	`ALTER TABLE shot ADD COLUMN assign_epoch INTEGER`,
+	`ALTER TABLE shot ADD COLUMN assign_root TEXT`,
 }
 
 func (s *Store) migrate() error {
@@ -307,7 +314,11 @@ type Shot struct {
 	CompletionTokens int
 	AnswerRaw        string
 	Outcome          string
-	Appointment      string
+	// AssignEpoch and AssignRoot are the slot this shot was fired under - the
+	// provenance an appointment token used to carry. Verifiable, unlike a
+	// token: the root is published at the RV's /v1/faucet/roots forever.
+	AssignEpoch int64
+	AssignRoot  string
 
 	// Deferred is how many rounds we held off before firing this shot because
 	// the node's queue was not empty. Read it next to LatencyMs: a fast time
@@ -331,11 +342,11 @@ func (s *Store) RecordShot(sh Shot) (int64, error) {
 		// keeps what was ASKED for, which is the only thing that makes a
 		// timeout diagnosable at all.
 		`INSERT INTO shot(fired_at,node_id,node_addr,slash24,engine,service,model,model_hash,
-		                  job_id,question_id,submit_status,outcome,appointment,answer_raw,
+		                  job_id,question_id,submit_status,outcome,assign_epoch,assign_root,answer_raw,
 		                  deferred,order_json)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sh.FiredAt.UnixMilli(), sh.NodeID, sh.NodeAddr, sh.Slash24, sh.Engine, sh.Service,
-		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.Appointment,
+		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.AssignEpoch, sh.AssignRoot,
 		sh.AnswerRaw, sh.Deferred, sh.OrderJSON)
 	if err != nil {
 		return 0, err

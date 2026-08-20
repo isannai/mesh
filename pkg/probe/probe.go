@@ -7,7 +7,7 @@ package probe
 // isannd over loopback — discovery, NAT traversal and the HTTP/3 hop to the
 // target all happen there, exactly as they do for `isann infer --nodes <id>`.
 //
-// IDLE IS THE DEFAULT. Without an active appointment it fetches nothing and
+// IDLE IS THE DEFAULT. Without a group assignment it fetches nothing and
 // fires nothing. The mesh is meant to be installed widely and appointed
 // selectively, so "installed but not appointed" has to be a quiet, cheap state.
 //
@@ -15,6 +15,7 @@ package probe
 // stored verbatim so it can be scored retroactively instead of re-fired.
 
 import (
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -165,8 +166,7 @@ type Config struct {
 	// questions to generate and more answers to compare; lower means the
 	// opposite. The re-check panel wants a majority from at least 3-4 distinct
 	// networks, so this should not go below about 4.
-	QuestionFanout int          `json:"question_fanout"`
-	Signer         SignerConfig `json:"signer"`
+	QuestionFanout int `json:"question_fanout"`
 }
 
 // defaultIsanndURL is the node-bridge's loopback address.
@@ -425,11 +425,14 @@ type Prober struct {
 	// process, and neither does this node's identity.
 	exclude map[string]bool
 
-	signer    Signer
-	hasSigner bool
+	// self is this node's address, and signKey the hardware-derived key behind
+	// it. The probe signs with the NODE IDENTITY key, never a wallet key —
+	// design G22: this signature is worth one free inference, not money.
+	self    string
+	signKey *ecdsa.PrivateKey
 
-	appt       Appointment
-	hasAppt    bool
+	assign     Assignment
+	hasAssign  bool
 	targets    []Target
 	imgTargets []Target
 	idleLogged bool
@@ -596,10 +599,12 @@ func New(cfg Config) (*Prober, error) {
 		deferrals: map[string]int{},
 		deferMax:  cfg.DeferMax,
 		openShots: map[string]bool{},
-		// Asked once at construction. isannd's /info is ungated for the same
-		// reason the appointment route is, so this needs no wallet; if it fails
-		// the set is simply smaller and the prober may waste a shot on itself.
-		exclude: excluded(selfIfExcluded(cfg, SelfNodeID(cfg.NodeBridgeAddr, client))),
+		// Derived, not asked. This used to be a call to isannd's /info; the
+		// same address comes out of the hardware, so the round trip bought
+		// nothing but a way to fail at startup. An error here leaves the set
+		// smaller and the prober may waste a shot on itself, which Refresh
+		// then reports properly.
+		exclude: excluded(selfIfExcluded(cfg, selfAddressOrEmpty())),
 	}, nil
 }
 
@@ -654,60 +659,43 @@ func (p *Prober) Once() {
 	p.FireRound()
 }
 
-// Refresh re-reads the appointment, the directory and the question queue.
+// Refresh re-reads the assignment, the directory and the question queue.
 //
-// The appointment is checked FIRST and everything else is skipped without one.
+// The assignment is checked FIRST and everything else is skipped without one.
 // An unappointed prober must not poll the RV: that would cost a round trip per
 // hour per idle node, for a list it has no right to act on.
 func (p *Prober) Refresh() {
-	appt, ok, err := FetchAppointment(p.cfg.NodeBridgeAddr, p.http)
+	// Who we are. Hardware-derived, so this is also the address the RV knows
+	// this node by and the one an operator writes into faucet.json's `probers`.
+	key, self, err := NodeSigningKey()
+	if err != nil {
+		log.Printf("[probe] %v — idle", err)
+		p.targets, p.hasAssign = nil, false
+		return
+	}
+	p.signKey, p.self = key, self
+
+	// This slot's groups. Absent is the ORDINARY state for a node that runs the
+	// mesh but was not named a prober, so it is logged once per transition
+	// rather than once per poll.
+	assign, ok, err := FetchAssignment(p.cfg.NodeBridgeAddr, self)
 	if err != nil {
 		log.Printf("[probe] %v", err)
-		p.hasAppt = false
-		return
+		return // keep the previous assignment: one flaky poll is not a retirement
 	}
 	if !ok {
-		// Logged once per transition, not once per hour. An idle prober is the
-		// normal state for a node that has the mesh but no appointment, and
-		// repeating it hourly would bury the messages that matter.
 		if !p.idleLogged {
-			log.Printf("[probe] no appointment installed — idle (issuer mints one with `ivm account issue --kind prober`, then `isann cred add`)")
+			log.Printf("[probe] not a prober this slot — idle (the RV names its probers in faucet.json; this node is %s)", self)
 			p.idleLogged = true
 		}
-		p.hasAppt, p.targets = false, nil
+		p.assign, p.hasAssign, p.targets = Assignment{}, false, nil
 		return
 	}
-	if !appt.Active(time.Now()) {
-		log.Printf("[probe] appointment %q expired %s — idle (install a new one, then `isann cred use`)",
-			appt.Alias, appt.Expires().UTC().Format(time.RFC3339))
-		p.hasAppt, p.targets = false, nil
-		return
+	if assign.Epoch != p.assign.Epoch {
+		log.Printf("[probe] epoch %d: %d group(s) to check, root %s (rv=%s)",
+			assign.Epoch, len(assign.Groups), assign.Root, assign.RV)
 	}
-	// Open the key the appointment is bound to. This is the only reason the
-	// key is touched at all in this milestone — firing is anonymous — but
-	// finding out here that the node holds no such key beats finding out later
-	// as "everything looks configured and nothing ever gets paid".
-	changed := !p.hasAppt || p.appt.Token != appt.Token
-	if changed {
-		signer, hasSigner, err := OpenSignerFor(appt, p.cfg.Signer)
-		if err != nil {
-			log.Printf("[probe] %v — idle", err)
-			p.hasAppt, p.hasSigner, p.targets = false, false, nil
-			return
-		}
-		p.signer, p.hasSigner = signer, hasSigner
-
-		log.Printf("[probe] appointment %q active until %s (issuer %s, prober %s)",
-			appt.Alias, appt.Expires().UTC().Format(time.RFC3339), appt.Issuer, appt.Prober)
-		if hasSigner {
-			log.Printf("[probe] signing key %s opened", signer.Address)
-		} else {
-			// Allowed for now, since nothing is signed yet — but the operator
-			// should know the key was never proven to be here.
-			log.Printf("[probe] no signer passphrase set; the key for %s is UNVERIFIED (tickets cannot be signed)", appt.Prober)
-		}
-	}
-	p.appt, p.hasAppt, p.idleLogged = appt, true, false
+	p.assign, p.hasAssign, p.idleLogged = assign, true, false
 
 	nodes, err := rvnodes.Fetch(p.cfg.NodeBridgeAddr, true)
 	if err != nil {
@@ -728,12 +716,23 @@ func (p *Prober) Refresh() {
 	if err := p.store.RecordObservations(observationsOf(nodes), now); err != nil {
 		log.Printf("[probe] record observations: %v", err)
 	}
-	p.targets = eligible(nodes, p.exclude)
+	// 🔴 The ASSIGNMENT decides who, the DIRECTORY decides how.
+	//
+	// The assignment carries addresses and nothing else, so it cannot say which
+	// service to aim at or whether the node has one ready. eligible() still
+	// filters for a ready text service — the RV cannot know that, it only knows
+	// who was online at the boundary.
+	// 🔴 Both counts are kept. Reporting only the final number makes two very
+	// different failures look identical: "the directory has nobody I can fire
+	// at" (no ready text service) versus "everyone ready belongs to another
+	// prober's group". The fix lives in a different place for each.
+	fireable := eligible(nodes, p.exclude)
+	p.targets = p.assignedTargets(fireable)
 	// Image targets only when there is a judge. Ordering a picture with no
 	// validator to look at it burns someone else's GPU for a result that gets
 	// thrown away — see image.go.
 	if p.validator.Enabled() {
-		p.imgTargets = imageTargets(nodes, p.exclude)
+		p.imgTargets = p.assignedTargets(imageTargets(nodes, p.exclude))
 	} else {
 		p.imgTargets = nil
 	}
@@ -746,7 +745,15 @@ func (p *Prober) Refresh() {
 	} else {
 		p.present = presenceFrom(sightings)
 	}
-	log.Printf("[probe] directory: %d nodes, %d eligible, %d image", len(nodes), len(p.targets), len(p.imgTargets))
+	log.Printf("[probe] directory: %d nodes, %d fireable, %d assigned, %d image (epoch %d)",
+		len(nodes), len(fireable), len(p.targets), len(p.imgTargets), p.assign.Epoch)
+	if len(fireable) == 0 && len(nodes) > 1 {
+		// Nothing to do, and the reason is upstream of the faucet entirely: a
+		// node qualifies only with a text service reporting server_ready, and
+		// the llama engine does not report it today. Said once here because
+		// the assignment looks healthy while nothing is ever fired.
+		log.Printf("[probe] no node advertises a ready text service - nothing can be fired at (server_ready)")
+	}
 
 	p.startRefill()
 	p.prune(now)
@@ -928,7 +935,7 @@ func (p *Prober) FireRound() {
 	var stats roundStats
 
 	// 🔴 COLLECTION RUNS FIRST AND IS NOT GATED. A picture already ordered has
-	// to be fetched whether or not we may fire again: the appointment could
+	// to be fetched whether or not we may fire again: the assignment could
 	// have expired, the directory could have come back empty, and neither
 	// changes the fact that a node drew something for us and the station will
 	// drop it after DoneTTL. Gating this behind the fire checks would strand
@@ -966,10 +973,13 @@ func (p *Prober) FireRound() {
 		}
 	}()
 
-	if !p.hasAppt || (len(p.targets) == 0 && len(p.imgTargets) == 0) {
+	if !p.hasAssign || (len(p.targets) == 0 && len(p.imgTargets) == 0) {
 		return
 	}
-	if !p.appt.Active(now) {
+	if p.assign.Stale(now) {
+		// The slot turned over mid-round. Targets computed under the old
+		// assignment carry the old root, and a node that has already moved on
+		// would reject every one of them.
 		return
 	}
 
@@ -1193,7 +1203,8 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		Model:       t.Service.Model,
 		ModelHash:   t.Service.ModelHash,
 		QuestionID:  q.ID,
-		Appointment: p.appt.Token,
+		AssignEpoch: p.assign.Epoch,
+		AssignRoot:  p.assign.Root,
 	}
 
 	res, serr := p.firer.Submit(t, q)
