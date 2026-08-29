@@ -1,6 +1,9 @@
 package probe
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The cases that decided the rule. Each one is a phrasing an honest node
 // actually produces, or an attack the rule has to survive.
@@ -122,5 +125,51 @@ func TestScoreTruncation(t *testing.T) {
 	// An engine that reports no usage must not have every wrong answer excused.
 	if v := Score(q, "Paris", 0); v != VerdictFail {
 		t.Errorf("no usage reported = %s, want fail", v)
+	}
+}
+
+// 🔴 The prompt ends in "A:" and the node is meant to continue it. An engine
+// that applies a chat template starts a FRESH reply instead, so the label comes
+// back inside the answer — our own text, charged to the node as a word it never
+// chose, out of the two the gate allows.
+func TestStripAnswerLabel(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"bare label", "A:澳元", "澳元"},
+		{"label with a space", "A: Paris", "Paris"},
+		{"spelled out", "Answer: Paris", "Paris"},
+		{"lowercase", "a: paris", "paris"},
+		// The engines that echo the label are often the ones typing CJK
+		// punctuation, so the full-width colon is not an exotic case.
+		{"full-width colon", "A：東京", "東京"},
+		{"leading space", "  A: Paris", "Paris"},
+
+		// Everything else is the node's own text and must survive untouched.
+		{"no label", "Paris", "Paris"},
+		{"two words", "Cape Town", "Cape Town"},
+		{"colon too far in", "The answer is: Paris", "The answer is: Paris"},
+		{"a time is not a label", "10:30", "10:30"},
+		{"another word before the colon", "AB: Paris", "AB: Paris"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := strings.TrimSpace(stripAnswerLabel(c.in)); got != c.want {
+				t.Errorf("stripAnswerLabel(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// The label matters because it is counted, not because it is ugly: one phantom
+// word is half the allowance a two-word draft has.
+func TestScoreIgnoresEchoedLabel(t *testing.T) {
+	q := Question{Category: CatGeography, Draft: "New Delhi"}
+
+	// Five words with the label, four without — and the gate allows draft+2.
+	if v := Score(q, "A: it is New Delhi", 6); v != VerdictPass {
+		t.Errorf("echoed label = %s, want pass", v)
+	}
+	// Stripping it must not turn a wrong answer into a right one.
+	if v := Score(q, "A: New York", 4); v != VerdictFail {
+		t.Errorf("echoed label on a wrong answer = %s, want fail", v)
 	}
 }

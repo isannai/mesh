@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/isannai/mesh/pkg/glog"
-	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/setup"
 	"github.com/isannai/mesh/pkg/signal"
+	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/tunnel"
 )
 
@@ -271,7 +271,6 @@ func hashHardware(hw *setup.HardwareSpec) string {
 	return fmt.Sprintf("%016x", h)
 }
 
-
 // Fallback cadences used when RV's register_ack has not yet been received
 // (cold start, or RV permanently down). Once an ack arrives, the atomics
 // in Provider take over via effective*Interval helpers. Match the defaults
@@ -295,6 +294,7 @@ const (
 //   - 정적 필드 (Version / BinHash / Owner / LocalAddr / HWHash / Emblem)
 //     변화 시: fullSync 자동 승격
 //   - 그 외: non-fullSync delta (RV 가 cached value merge)
+//
 // register 페이로드는 ≈ 수백 bytes, 부담 적음.
 //
 // Also installs the OnPush ack handler that picks up PingIntervalSec and
@@ -503,7 +503,10 @@ func (p *Provider) pushAllMetrics(ctx context.Context) {
 		return
 	}
 	if len(batch) == 0 {
-		p.Log.Log(glog.Debug, "[station] push metrics batch: empty (no service has value)")
+		if p.lastMetrics != "" {
+			p.Log.Log(glog.Debug, "[station] push metrics: nothing to report")
+			p.lastMetrics = ""
+		}
 		return
 	}
 	// One log line per push instead of N — matches the new send pattern.
@@ -514,7 +517,16 @@ func (p *Provider) pushAllMetrics(ctx context.Context) {
 		}
 		fmt.Fprintf(&summary, "%s=%s/q%d/r%d", m.Service, m.Status, m.QueueDepth, m.RunningCount)
 	}
-	p.Log.Log(glog.Debug, "[station] push metrics batch (%d): %s", len(batch), summary.String())
+	// 🔴 Only when it CHANGED. The push runs every second and services sit
+	// idle most of the time, so logging each one buried every other line in the
+	// file — the log stopped being readable exactly when something was wrong
+	// and someone came looking. A repeated state is not news; a change is.
+	line := summary.String()
+	if line == p.lastMetrics {
+		return
+	}
+	p.lastMetrics = line
+	p.Log.Log(glog.Debug, "[station] push metrics (%d): %s", len(batch), line)
 }
 
 // startPingLoop sends a periodic liveness ping to isannd's

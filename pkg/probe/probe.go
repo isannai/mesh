@@ -48,17 +48,37 @@ type Config struct {
 	// schedule below, so a shorter interval only means a due node is served
 	// sooner, never that more shots go out.
 	FireIntervalSec int `json:"fire_interval_sec"`
-	// ScheduleSec is the uptime each shot requires, in SECONDS. The n-th shot
-	// comes due once the node has been continuously present that long — see
-	// schedule.go. The list length IS the daily cap.
+	// FireLeadSec and FireTailSec are the dead zones at the start and end of a
+	// slot, in SECONDS. A shot goes out somewhere between them — see
+	// schedule.go for why neither edge is usable.
 	//
-	// Seconds because the same field has to be readable at both ends: the real
-	// ladder is hours (3600 = 1h), but a smoke test wants ten seconds, and
-	// writing ten seconds in hours is 0.00277.
-	ScheduleSec []float64 `json:"schedule_sec"`
-	// ScheduleHours is the superseded spelling, read only to migrate configs
-	// already in the field. ScheduleSec wins when both are set.
-	ScheduleHours []float64 `json:"schedule_hours,omitempty"`
+	// There is no ladder and no daily cap any more: one shot per slot is the
+	// whole rule, and the slot calendar decides how many that is.
+	FireLeadSec float64 `json:"fire_lead_sec"`
+	FireTailSec float64 `json:"fire_tail_sec"`
+	// SubnetsPerRound and ImagesPerRound bound how much ONE round fires.
+	//
+	// The text unit is a /24 SUBNET, not a node and not a faucet group. Nodes
+	// sharing a /24 must answer simultaneously (that is what catches a farm
+	// behind one GPU), so a subnet is indivisible here — a batch of two can be
+	// two nodes or twenty depending on how they are spread. "group" was the
+	// first name and it collided with the merkle groups an assignment is made
+	// of, which are a different partition of a different set.
+	//
+	// 🔴 Not the same thing as the concurrency limits. Those cap how many run
+	// at once while the round still waits for every due node; these decide how
+	// many the round takes at all, leaving the rest for the next one. Without
+	// them a thirty-two group directory answered inside a single minute.
+	//
+	// Two numbers because the work differs: a text answer is a second and a
+	// picture is one to three minutes, so an image round given the text batch
+	// would still be drawing when the next round came up.
+	//
+	// 0 or negative means the built-in default. There is no "unlimited": that
+	// spelling is the burst these exist to prevent, and an operator who wants
+	// it can write a number larger than the directory.
+	SubnetsPerRound int `json:"subnets_per_round"`
+	ImagesPerRound  int `json:"images_per_round"`
 	// TextDeadline is the base answer allowance for a TEXT question, in seconds,
 	// scaled up for larger declared models so a bigger machine is not penalised
 	// for being one.
@@ -150,6 +170,16 @@ type Config struct {
 	// exercising. Turn it on to try the pipeline; leave it off in production.
 	FireAtSelf bool   `json:"fire_at_self"`
 	DB         string `json:"db"`
+	// ChainID / FaucetAddr scope a ticket to one deployment, and both are
+	// signed. Unset is the honest value before a contract exists: the fields
+	// stay in the signature from day one rather than being added later, which
+	// would invalidate every ticket already banked.
+	//
+	// 🔴 They must match what the rendezvous is configured with. A ticket
+	// carrying someone else's chain is refused there, which is the point —
+	// otherwise one prober key could mint receipts across deployments.
+	ChainID    uint64 `json:"chain_id,omitempty"`
+	FaucetAddr string `json:"faucet_addr,omitempty"`
 	// QueueLowWater is the refill threshold: when a category has fewer than
 	// this many unused questions left, another batch is generated. Questions
 	// are consumed once and discarded (that is what makes a cache attack
@@ -175,11 +205,18 @@ const defaultIsanndURL = "http://127.0.0.1:8443"
 // DefaultConfig returns the settings the prober runs with when nothing is set.
 func DefaultConfig() Config {
 	return Config{
-		RefreshSec:      3600,
-		FireIntervalSec: 60,
-		// 3 · 6 · 9 · 12 · 15 hours, written out so the file that ships is the
-		// same shape an operator edits.
-		ScheduleSec:      []float64{10800, 21600, 32400, 43200, 54000},
+		// Half an hour. The directory is read to learn who is in the slot and
+		// that membership is fixed for the whole slot, so polling it by the
+		// minute asked the RV the same question a hundred and eighty times for
+		// one answer. Half an hour still gives four looks inside a firing
+		// window, which is enough for a node that appeared late to be seen
+		// before its offset comes up.
+		RefreshSec:       1800,
+		FireIntervalSec:  60,
+		FireLeadSec:      DefaultFireLead.Seconds(),
+		FireTailSec:      DefaultFireTail.Seconds(),
+		SubnetsPerRound:  DefaultSubnetsPerRound,
+		ImagesPerRound:   DefaultImagesPerRound,
 		TextDeadline:     30,
 		GeneratorService: "llm-api",
 		ClipService:      "clip-api",
@@ -212,18 +249,32 @@ func DefaultConfig() Config {
 	// see defaultGenerators / defaultClips.
 }
 
-// Schedule resolves the uptime ladder in seconds.
+// FireLead and FireTail resolve the slot dead zones.
 //
-// ScheduleSec wins; `schedule_hours` is honoured only when the new key was left
-// alone, so a config mid-migration is not steered by the field being replaced.
-func (c Config) Schedule() []float64 {
-	if len(c.ScheduleSec) > 0 {
-		return c.ScheduleSec
+// A negative value is a typo, not an instruction to fire before the slot
+// opens, so it falls back rather than being honoured. Zero IS honoured: an
+// operator who wants the full slot has said so explicitly.
+func (c Config) FireLead() time.Duration { return fireBound(c.FireLeadSec, DefaultFireLead) }
+func (c Config) FireTail() time.Duration { return fireBound(c.FireTailSec, DefaultFireTail) }
+
+// Batch resolves the per-round batch sizes: text subnets, then image nodes.
+func (c Config) Batch() (int, int) {
+	return batchBound(c.SubnetsPerRound, DefaultSubnetsPerRound),
+		batchBound(c.ImagesPerRound, DefaultImagesPerRound)
+}
+
+func batchBound(n, fallback int) int {
+	if n < 1 {
+		return fallback
 	}
-	if len(c.ScheduleHours) > 0 {
-		return hoursToSec(c.ScheduleHours)
+	return n
+}
+
+func fireBound(sec float64, fallback time.Duration) time.Duration {
+	if sec < 0 {
+		return fallback
 	}
-	return nil // parseScheduleSec falls back to DefaultSchedule
+	return time.Duration(sec * float64(time.Second))
 }
 
 // defaultGenerators is what an ABSENT `generators` means: this node, as before.
@@ -284,17 +335,8 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, err
 	}
 	if err == nil {
-		// The seeded default is cleared before unmarshalling so that a file
-		// carrying only the superseded `schedule_hours` is not overruled by the
-		// default sitting in ScheduleSec. Restored below if the file set
-		// neither.
-		seeded := cfg.ScheduleSec
-		cfg.ScheduleSec = nil
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return cfg, fmt.Errorf("parse %s: %w", path, err)
-		}
-		if len(cfg.ScheduleSec) == 0 && len(cfg.ScheduleHours) == 0 {
-			cfg.ScheduleSec = seeded
 		}
 	}
 	// Absorb the superseded single-service key. Configs are already deployed
@@ -437,10 +479,10 @@ type Prober struct {
 	imgTargets []Target
 	idleLogged bool
 
-	// schedule is the uptime ladder; present is how much of today each node has
-	// been up for, totalled across gaps. Both recomputed on refresh.
-	schedule []time.Duration
-	present  map[string]time.Duration
+	// present is how much of today each node has been up for, totalled across
+	// gaps. Recomputed on refresh. Reporting only — firing is decided by the
+	// slot calendar, not by this.
+	present map[string]time.Duration
 
 	// metrics is the RV's volatile per-service view, refreshed alongside the
 	// directory. It answers how long this node typically takes (imageDeadline),
@@ -594,7 +636,6 @@ func New(cfg Config) (*Prober, error) {
 		validator: NewValidator(cfg.NodeBridgeAddr, clips),
 		http:      client,
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		schedule:  parseScheduleSec(cfg.Schedule()),
 		present:   map[string]time.Duration{},
 		deferrals: map[string]int{},
 		deferMax:  cfg.DeferMax,
@@ -983,27 +1024,77 @@ func (p *Prober) FireRound() {
 		return
 	}
 
-	counts, err := p.store.ShotCountsToday(dayStart(now))
+	// Counted for THIS SLOT, not this day. The slot is the unit a ticket is
+	// keyed by, so it is also the unit the one-shot rule has to be counted in.
+	counts, err := p.store.ShotCountsInSlot(p.assign.Epoch)
 	if err != nil {
 		log.Printf("[probe] shot counts: %v", err)
 		return
 	}
 
-	// No random draw and no budget: a node is here because it EARNED the shot
-	// by staying up past the next threshold. Load spreads on its own, since
-	// nodes anchor at whatever time they happened to connect.
+	// No random draw and no budget: a node is here because its offset into the
+	// slot has come up. Load spreads on its own — the offset is hashed per node
+	// and per slot, so the directory is smeared across the whole window.
 
 	// 🔴 The two tracks are independent. An earlier version returned here when
 	// no text node was due, which silently took the image round with it — a
 	// node serving only sd-api was then never fired at, and the log said
 	// nothing at all because the summary line lives past this point.
-	due := dueTargets(p.targets, p.present, counts, p.schedule)
-	groups := groupBySlash24(due)
+	lead, tail := p.cfg.FireLead(), p.cfg.FireTail()
+	due := dueTargets(p.targets, now, p.assign, counts, lead, tail)
+	subnetBatch, _ := p.cfg.Batch()
+	groups := takeBatch(groupBySlash24(due), subnetBatch)
 	if len(groups) > 0 {
+		// 🔴 Claim the slot BEFORE the image track reads the same map. A node
+		// serving both llama and sd is one node with one root, so a text shot
+		// and an image shot in the same slot fold into one ticket — the second
+		// one is work the node does for nothing. The database catches this on
+		// the next round; this catches it within the round.
+		for _, g := range groups {
+			for _, t := range g {
+				counts[t.Node.ID]++
+			}
+		}
 		p.fireTextGroups(groups, now, &stats)
 	}
 
 	p.fireImageRound(now, counts, &stats)
+}
+
+// DefaultSubnetsPerRound and DefaultImagesPerRound bound one round's work when
+// the config leaves them unset.
+//
+// 🔴 THE CONCURRENCY LIMIT IS NOT A BATCH LIMIT, which is what these fix. The
+// semaphores below cap how many run AT ONCE while the round still waits for
+// every due node — thirty-two groups went out in a single round, sixteen and
+// then sixteen, and the round simply took twice as long. That is the whole
+// directory answering inside one minute, which is the burst the firing window
+// was widened to avoid.
+//
+// So a round takes a slice and leaves the rest due. Nothing is lost: an
+// untouched node has no shot recorded, so the next round picks it up, and the
+// window is two hours (a hundred and twenty rounds at the default cadence) for
+// exactly this reason.
+//
+// The two numbers differ because the work does. A text answer is a second and
+// a picture is one to three minutes, so an image round that took the same
+// batch would still be drawing when the next one came round.
+const (
+	DefaultSubnetsPerRound = 16
+	DefaultImagesPerRound  = 4
+)
+
+// takeBatch returns at most n items, keeping order.
+//
+// Order is the round's own — /24 grouping for text, directory order for images.
+// Neither is shuffled: a stable order means a node that keeps missing its shot
+// is visible in the log as the same name every round, rather than looking like
+// intermittent bad luck spread across the directory.
+func takeBatch[T any](items []T, n int) []T {
+	if n < 1 || len(items) <= n {
+		return items
+	}
+	return items[:n]
 }
 
 // collectRound asks after every picture still on order and rebuilds the open set.
@@ -1258,6 +1349,11 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		log.Printf("[probe] complete shot: %v", err)
 	}
 	p.noteTicket(t.Node.ID, verdict, end)
+	if verdict == VerdictPass {
+		// Signed and delivered here rather than batched: a ticket is bound to
+		// the slot's root, and the slot can end while a batch waits.
+		p.issueTicket(t, end)
+	}
 	switch verdict {
 	case VerdictFail:
 		log.Printf("[probe] %s answered %q, expected %q (%s)",
@@ -1288,8 +1384,10 @@ func (p *Prober) noteTicket(nodeID, verdict string, at time.Time) {
 		log.Printf("[probe] %s earned a ticket", short(nodeID))
 		return
 	}
+	// Out of the day's slots, not out of a ladder. One slot can only ever yield
+	// one ticket, so the denominator is how many slots a day holds.
 	log.Printf("[probe] %s earned a ticket (%d/%d today)",
-		short(nodeID), counts[nodeID], len(p.schedule))
+		short(nodeID), counts[nodeID], slotsPerDay(p.assign.SlotSec))
 }
 
 // trim shortens an answer for a log line.

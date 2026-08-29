@@ -21,8 +21,8 @@ import (
 	"testing"
 
 	"github.com/isannai/mesh/pkg/engine/manifest"
-	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/station/queue"
 )
 
 // mpEngine records the Content-Type + raw body it receives and returns an

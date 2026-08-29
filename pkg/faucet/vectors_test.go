@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // Golden vectors are the ONLY thing that catches the failure this package is
@@ -39,7 +41,12 @@ type vectorCase struct {
 	// group. One per group is enough to pin the format; the interesting part is
 	// the encoding, not the address.
 	ProbeMessages []string `json:"probe_messages"`
-	Groups        []struct {
+	// TicketMessages pins the receipt format the same way, for the first
+	// member of each group. Three repositories sign and verify this string;
+	// a drifted separator or integer width would only surface as claims being
+	// rejected weeks later.
+	TicketMessages []string `json:"ticket_messages"`
+	Groups         []struct {
 		Members []string `json:"members"`
 		Probers []string `json:"probers"`
 	} `json:"groups"`
@@ -53,6 +60,7 @@ type vectorFile struct {
 	// can rebuild the same case list from scratch.
 	AddrRule   string       `json:"addr_rule"`
 	ProberRule string       `json:"prober_rule"`
+	TicketRule string       `json:"ticket_rule"`
 	Cases      []vectorCase `json:"cases"`
 }
 
@@ -83,6 +91,7 @@ func buildVectors() vectorFile {
 		Note:       "faucet group assignment golden vectors. Every implementation of pkg/faucet must reproduce these exactly.",
 		AddrRule:   "node i = first 20 bytes of keccak256(\"faucet-test-node\" || uint64be(i))",
 		ProberRule: "prober i = first 20 bytes of keccak256(\"faucet-test-prober\" || uint64be(i))",
+		TicketRule: "chainId=1337, faucetAddr=keccak256(\"faucet-test-contract\")[:20], owner=keccak256(\"faucet-test-owner\" || node)[:20]",
 	}
 
 	for _, s := range specs {
@@ -123,6 +132,8 @@ func buildVectors() vectorFile {
 
 			if len(g.Members) > 0 {
 				c.ProbeMessages = append(c.ProbeMessages, ProbeMessage(a.Epoch, a.Root, g.Members[0]))
+				c.TicketMessages = append(c.TicketMessages,
+					TicketMessage(testChainID, testFaucetAddr(), g.Probers[0], g.Members[0], testOwner(g.Members[0]), a.Root))
 			}
 		}
 		out.Cases = append(out.Cases, c)
@@ -189,6 +200,15 @@ func TestGoldenVectors(t *testing.T) {
 				t.Errorf("%s: probe message %d: got %s, want %s", w.Name, j, g.ProbeMessages[j], w.ProbeMessages[j])
 			}
 		}
+		if len(w.TicketMessages) != len(g.TicketMessages) {
+			t.Errorf("%s: %d ticket messages != %d", w.Name, len(g.TicketMessages), len(w.TicketMessages))
+			continue
+		}
+		for j := range w.TicketMessages {
+			if w.TicketMessages[j] != g.TicketMessages[j] {
+				t.Errorf("%s: ticket message %d: got %s, want %s", w.Name, j, g.TicketMessages[j], w.TicketMessages[j])
+			}
+		}
 	}
 }
 
@@ -240,4 +260,21 @@ func parseAddrList(t *testing.T, caseName string, in []string) []Addr {
 		out = append(out, a)
 	}
 	return out
+}
+
+// Ticket vector inputs. Fixed values, derived the same way the node and
+// prober addresses are, so another implementation can rebuild them without
+// reading this file.
+const testChainID = 1337
+
+func testFaucetAddr() Addr {
+	var a Addr
+	copy(a[:], crypto.Keccak256([]byte("faucet-test-contract")))
+	return a
+}
+
+func testOwner(node Addr) Addr {
+	var a Addr
+	copy(a[:], crypto.Keccak256([]byte("faucet-test-owner"), node[:]))
+	return a
 }

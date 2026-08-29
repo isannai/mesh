@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/station/queue"
 )
 
 // stubFactory builds a Manager that forwards to a single in-memory mock

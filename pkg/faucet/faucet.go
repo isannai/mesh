@@ -42,6 +42,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -373,4 +374,44 @@ func uint64be(v uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
 	return b
+}
+
+// MarshalJSON / UnmarshalJSON render an address as 0x-hex instead of the byte
+// array Go would produce for a [20]byte.
+//
+// 🔴 This is a wire format, not a display nicety. Every other place an address
+// appears — the RV's /v1/nodes, a signed message, a log line — is lowercase
+// 0x-hex, and a ticket that serialised as [13,96,235,…] could not be compared
+// with any of them by eye or by grep. Round-tripping through the same text form
+// also means a stored ticket and a transmitted one are byte-identical, which
+// matters because the signature covers exactly those characters.
+func (a Addr) MarshalJSON() ([]byte, error) { return json.Marshal(a.Hex()) }
+
+func (a *Addr) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	v, err := ParseAddr(s)
+	if err != nil {
+		return err
+	}
+	*a = v
+	return nil
+}
+
+// MarshalJSON / UnmarshalJSON do the same for a root or leaf digest.
+func (h Hash) MarshalJSON() ([]byte, error) { return json.Marshal(h.Hex()) }
+
+func (h *Hash) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	v, err := ParseHash(s)
+	if err != nil {
+		return err
+	}
+	*h = v
+	return nil
 }

@@ -170,7 +170,7 @@ func observationsOf(nodes []rvnodes.Node) []Observation {
 			// The directory was fetched with online=true, so everything in it
 			// was live as of the RV's own 90-second cutoff.
 			Online:  true,
-			Version: n.Version,
+			Version: n.Version.Station,
 		}
 		if svc, ok := n.TextService(); ok {
 			o.MaxQueue = svc.MaxQueue

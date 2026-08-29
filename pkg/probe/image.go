@@ -365,6 +365,11 @@ func (p *Prober) collectImageShot(sh Shot, now time.Time, stats *roundStats) boo
 	// day it was earned in, and paying it into the new one would give that node
 	// a head start it did not work for.
 	p.noteTicket(sh.NodeID, verdict, sh.FiredAt)
+	if verdict == VerdictPass {
+		// Same fired-day reasoning as noteTicket above: the receipt belongs to
+		// the slot the picture was ordered in (ticket.go).
+		p.issueImageTicket(sh, now)
+	}
 	stats.settle(OutcomeAnswered, verdict)
 	if verdict == VerdictFail {
 		log.Printf("[probe] %s image failed: %s", short(sh.NodeID), failedChecks(j))
@@ -524,19 +529,25 @@ func (p *Prober) holdBusy(due []Target) []Target {
 
 // fireImageRound orders pictures from the image nodes that have come due.
 //
-// It shares the day's shot counts with the text round rather than keeping its
-// own: the cap bounds what the prober costs a NODE, and a node running both
-// engines should not be probed twice as often for it.
+// It shares the slot's shot counts with the text round rather than keeping its
+// own: one node is one node whichever engine answers, and its slot yields one
+// ticket either way, so a machine running both must not be fired at twice for
+// the same root.
 //
 // The /24 grouping is deliberately NOT applied here. That rule exists so a farm
 // sharing one GPU has to answer simultaneously; image generation already takes
 // tens of seconds and firing a whole group at once would simply queue behind
 // itself. The text track carries the sybil burst.
-func (p *Prober) fireImageRound(now time.Time, shotsToday map[string]int, stats *roundStats) {
+func (p *Prober) fireImageRound(now time.Time, shotsInSlot map[string]int, stats *roundStats) {
 	if len(p.imgTargets) == 0 || !p.validator.Enabled() {
 		return
 	}
-	due := dueTargets(p.imgTargets, p.present, shotsToday, p.schedule)
+	due := dueTargets(p.imgTargets, now, p.assign, shotsInSlot, p.cfg.FireLead(), p.cfg.FireTail())
+	// Batched before the queue probes, not after: holdBusy costs a round trip
+	// per target, so probing the whole directory to then fire four of them is
+	// the expensive half done for nothing.
+	_, imageBatch := p.cfg.Batch()
+	due = takeBatch(due, imageBatch)
 	// A node whose last picture is still on order is not fired at again. That is
 	// what keeps a slow node's queue from growing under us — the failure mode
 	// the old blocking collect produced, one abandoned job at a time.

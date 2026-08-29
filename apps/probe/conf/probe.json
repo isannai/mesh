@@ -1,15 +1,13 @@
 {
   "node_bridge_addr": "http://127.0.0.1:8443",
-  "refresh_sec": 3600,
+  "refresh_sec": 1800,
   "fire_interval_sec": 60,
 
-  "schedule_sec": [
-    10800,
-    21600,
-    32400,
-    43200,
-    54000
-  ],
+  "fire_lead_sec": 1800,
+  "fire_tail_sec": 1800,
+
+  "subnets_per_round": 2,
+  "images_per_round": 2,
 
   "text_deadline_sec": 30,
   "image_deadline_sec": 0,

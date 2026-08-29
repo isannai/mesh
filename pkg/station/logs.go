@@ -130,11 +130,11 @@ func (p *Provider) handleLogTail(stream quic.Stream, req *http.Request, file str
 	if err != nil {
 		p.Log.Log(glog.Error, "[station] logs tail open FAILED: path=%q err=%v workDir=%q", fullPath, err, p.InstallClient.WorkDir)
 		body, _ := json.Marshal(map[string]string{
-			"error":    "file not found",
-			"path":     fullPath,
-			"workDir":  p.InstallClient.WorkDir,
-			"cause":    err.Error(),
-			"binMark":  "v2-diag-0425",
+			"error":   "file not found",
+			"path":    fullPath,
+			"workDir": p.InstallClient.WorkDir,
+			"cause":   err.Error(),
+			"binMark": "v2-diag-0425",
 		})
 		writeHTTPResponse(stream, 404, "application/json", body)
 		return

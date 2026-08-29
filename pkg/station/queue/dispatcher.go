@@ -257,8 +257,8 @@ func forceStreamFlag(body []byte) []byte {
 func streamSentenceChunks(ctx context.Context, resp *http.Response, job *Job, streamPath string, watchdog *time.Timer, idle time.Duration) (int, string, []byte, error) {
 	seg := NewSegmenter(job.ChunkMode, 0)
 	var full strings.Builder
-	var lastWithChoices map[string]any // last chunk carrying choices[] (id/model/finish_reason)
-	var usageObj any                   // top-level usage (final chunk, needs stream_options.include_usage)
+	var lastWithChoices map[string]any  // last chunk carrying choices[] (id/model/finish_reason)
+	var usageObj any                    // top-level usage (final chunk, needs stream_options.include_usage)
 	toolAcc := map[int]map[string]any{} // tool_calls reassembled from deltas, keyed by index
 	var toolOrder []int                 // first-seen order of tool-call indices
 

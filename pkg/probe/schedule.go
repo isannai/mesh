@@ -1,131 +1,150 @@
 package probe
 
-// schedule.go — when each node's next shot is due.
+// schedule.go — when each node's shot is due.
 //
-// A node earns its five shots by BEING UP, not by being lucky enough to be
-// picked. The n-th shot becomes due once the node has been present for the n-th
-// threshold, counted across the whole day:
+// ONE SHOT PER SLOT, FIRED INSIDE THE SLOT.
 //
-//	3h → 1st   6h → 2nd   9h → 3rd   12h → 4th   15h → 5th
+// The slot is the unit everything downstream is denominated in. A ticket's key
+// is (prober, node, root) and the root changes only at a slot boundary, so two
+// shots inside one slot collapse into a single ticket no matter how well the
+// node answered both. Firing more often than once a slot therefore costs the
+// node work and returns nothing — the extra shots are invisible by the time
+// they become money.
 //
-// That is the whole point of the faucet: five randomly scattered shots would
-// only prove "this node was alive five times", while thresholds that keep
-// climbing prove "this node was there for most of the day".
+// So the schedule is the slot calendar itself. No ladder, no daily cap to keep
+// in step with anything: eight slots in a day, one shot each.
 //
-// WHY NOT `connected_at` DIRECTLY
+// # WHY NOT AT THE SLOT BOUNDARY
 //
-// The RV reports when the node's current control connection opened, and that
-// resets on every reconnect. Home connections drop — ISP resets, DHCP renewals,
-// a laptop sleeping — and a node that reconnects every 90 minutes would never
-// cross even the first threshold and would earn NOTHING, forever. Since this is
-// a network of self-hosted machines, that would exclude a large share of the
-// people it exists for.
+// Both edges are unusable, for different reasons.
 //
-// So continuity is measured by the prober's OWN hourly observations instead:
-// a node keeps its anchor as long as it shows up in each successive poll. The
-// hourly granularity is the tolerance — a three-minute blip between polls is
-// invisible and forgiven, while a genuine hour-long absence resets the anchor.
+//	the OPENING   the root has just been replaced. A node that has not yet
+//	              taken delivery of the new one rejects the bundle, and a
+//	              prober still holding the old one signs the wrong slot.
+//	the CLOSING   the verdict has to land while the assignment is still held.
+//	              The image track judges a round or two after it fires, and a
+//	              picture ordered at the end of a slot is graded after the
+//	              membership proof it would need is gone — the ticket is then
+//	              dropped, which is what "slot turned over before the verdict"
+//	              in the log was.
+//
+// Half an hour of clearance at each end leaves a two-hour window in a
+// three-hour slot. The tail is the one that has already cost tickets, so it is
+// sized for the slower track rather than the faster one.
+//
+// # WHEN INSIDE THE WINDOW
+//
+// As soon as it opens, in whatever order the round hands them over, and the
+// concurrency limits do the spacing (sixteen text groups at a time, four
+// pictures). A node not reached in one round is still due in the next, so the
+// prober works through the directory rather than trying to place every node on
+// a calendar.
+//
+// This replaced a hashed per-node offset. The hash spread load evenly and was
+// reproducible, but it made the schedule unreadable in the small: an operator
+// watching one node saw "nothing happened for 97 minutes" and had no way to
+// tell that from a broken prober. Sequential firing gives one sentence instead
+// — "it starts at half past and works down the list" — and the window is two
+// hours wide precisely so working down the list has room.
+//
+// 🔴 THE WINDOW IS A HARD BOUND, NOT A PREFERENCE. Once the tail is reached the
+// remaining nodes are dropped and wait for the next slot. Firing into the tail
+// would produce a verdict that lands after the assignment is gone, which is a
+// ticket the node cannot be paid for — the node does the work for nothing. A
+// prober that routinely runs out of window is one whose group is too large,
+// and that is a decision for the RV's `num_of_node`, not something to paper
+// over here.
 
 import (
-	"sort"
 	"time"
+
+	"github.com/isannai/mesh/pkg/faucet"
 )
 
-// DefaultSchedule is the uptime each shot requires.
+// DefaultFireLead and DefaultFireTail are the dead zones at each end of a slot.
 //
-// A flat three-hour step, chosen over the widening 1/3/5/8/13 ladder it
-// replaced. Two knobs live in the list and they were decided separately:
+// Thirty minutes each, which in a three-hour slot leaves two hours to fire in.
+// Expressed in seconds in the config for the same reason the old ladder was:
+// production wants half an hour and a smoke test wants ten seconds, and only
+// one of those is writable in both units.
+const (
+	DefaultFireLead = 30 * time.Minute
+	DefaultFireTail = 30 * time.Minute
+)
+
+// fireWindow returns the offsets from slot start between which a shot may go
+// out, as [start, end].
 //
-//	the FIRST entry   decides whether an unstable node earns anything at all.
-//	the LAST entry    decides how much of a day earns the full five: 15h is
-//	                  most of a waking day, and leaves room to fall short.
-//
-// 🔴 THE FIRST ENTRY COSTS SOMETHING, DELIBERATELY. At one hour a machine that
-// is only ever on for a couple of hours still earned a ticket; at three it
-// earns nothing. That is the accepted price of a rule that reads as one
-// sentence — "every three hours, five a day" — instead of a paragraph
-// explaining why the gaps widen. Uniform spacing is also what makes the point
-// curve legible: every ticket stands for the same three hours.
-//
-// The length of this list IS the daily cap, and PointCurve must have an entry
-// for each.
-var DefaultSchedule = []time.Duration{
-	3 * time.Hour,
-	6 * time.Hour,
-	9 * time.Hour,
-	12 * time.Hour,
-	15 * time.Hour,
+// A slot too short to hold both dead zones would leave nothing to fire in and
+// the prober would go permanently silent — the failure mode is invisible,
+// because "no shots" is also what an unappointed prober looks like. So the
+// window collapses to the middle instant instead: still inside the slot, still
+// deterministic, and a slot that small is a test configuration anyway.
+func fireWindow(slotSec int, lead, tail time.Duration) (time.Duration, time.Duration) {
+	if slotSec <= 0 {
+		slotSec = faucet.SlotSeconds
+	}
+	slot := time.Duration(slotSec) * time.Second
+	if lead < 0 {
+		lead = 0
+	}
+	if tail < 0 {
+		tail = 0
+	}
+	if lead+tail >= slot {
+		mid := slot / 2
+		return mid, mid
+	}
+	return lead, slot - tail
 }
 
-// parseScheduleSec turns configured SECONDS into durations, falling back to the
-// default when unset.
+// dueTargets picks the nodes whose shot has come due in this slot.
 //
-// Seconds rather than hours because the unit has to serve two jobs. In
-// production the thresholds are hours, but testing means asking "does a shot go
-// out at all", and expressing ten seconds in hours is 0.00277 — a number nobody
-// can read and everybody mistypes. Seconds make both ends writable:
-//
-//	production   [3600, 10800, 18000, 28800, 46800]
-//	testing      [10, 20, 30]
-//
-// Sorted ascending because the n-th shot must require more uptime than the
-// (n-1)-th — an out-of-order list would make a later shot due before an earlier
-// one and the counter would run backwards.
-//
-// Non-positive entries are dropped rather than honoured: a zero threshold means
-// "due the instant the node is first seen", which is not a statement about
-// uptime at all. If that leaves nothing, the default stands.
-func parseScheduleSec(sec []float64) []time.Duration {
-	if len(sec) == 0 {
-		return DefaultSchedule
+// shotsInSlot is counted from the database rather than kept in memory, so a
+// prober that restarted mid-slot does not fire a second time at a node it
+// already served. It counts EVERY shot including refusals and timeouts: the
+// one-per-slot rule bounds what the prober costs a node, and a node that is
+// unreachable must not be retried in a loop for being unreachable.
+func dueTargets(targets []Target, now time.Time, a Assignment, shotsInSlot map[string]int,
+	lead, tail time.Duration) []Target {
+
+	slotSec := a.SlotSec
+	if slotSec <= 0 {
+		slotSec = faucet.SlotSeconds
 	}
-	out := make([]time.Duration, 0, len(sec))
-	for _, s := range sec {
-		if s <= 0 {
+	slotStart := time.Unix(faucet.SlotStartAt(a.Epoch, slotSec), 0)
+	opens, closes := fireWindow(slotSec, lead, tail)
+
+	// Both edges are checked. Only testing the opening one was a real hole: a
+	// node the round could not reach stayed due for the rest of the slot and
+	// was eventually fired at inside the tail, which is the exact case the tail
+	// exists to prevent.
+	if now.Before(slotStart.Add(opens)) || now.After(slotStart.Add(closes)) {
+		return nil
+	}
+
+	var out []Target
+	for _, t := range targets {
+		if shotsInSlot[t.Node.ID] > 0 {
 			continue
 		}
-		out = append(out, time.Duration(s*float64(time.Second)))
-	}
-	if len(out) == 0 {
-		return DefaultSchedule
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
-}
-
-// hoursToSec converts the superseded `schedule_hours` spelling. Configs are
-// already deployed with it, and dropping it would silently reset an operator's
-// ladder to the default.
-func hoursToSec(hours []float64) []float64 {
-	out := make([]float64, 0, len(hours))
-	for _, h := range hours {
-		out = append(out, h*3600)
+		out = append(out, t)
 	}
 	return out
 }
-
-// observationGap is how long a node may vanish between polls and still be
-// counted as having been there the whole time.
-//
-// Slightly more than the hourly poll so one missed poll is forgiven and two are
-// not: a poll can be late (a slow directory fetch, a restarted prober), and
-// charging a node for the prober's hiccup would be measuring the wrong machine.
-const observationGap = 100 * time.Minute
 
 // presenceFrom totals how long each node has been up today.
 //
-// 🔴 CUMULATIVE, NOT CONTINUOUS. This used to track an anchor — the start of the
-// most recent unbroken run — and any gap longer than observationGap threw the
-// whole day away and started the ladder over. A home connection that drops once
-// in the afternoon lost every hour it had already earned, and one that drops
-// every couple of hours could never reach even the first threshold no matter
-// how long the machine was left on. It was measuring the ISP, not the node.
+// 🔴 NOT USED FOR FIRING. The schedule is the slot calendar now; this is kept
+// for `probe -report`, where "how much of the day was this node up" is a
+// question an operator still asks. It stays here rather than moving to
+// report.go because the tolerance it encodes belongs with the observation
+// cadence, not with the rendering.
 //
-// Time present is added up instead. A gap is not counted (the node was away and
-// earns nothing for it) but it does not erase what came before either. Eighteen
-// hours is still eighteen hours of a twenty-four hour day, so the statement the
-// faucet wants — "this machine was there for most of the day" — survives being
-// made of pieces.
+// CUMULATIVE, NOT CONTINUOUS. A gap is not counted (the node was away and earns
+// nothing for it) but it does not erase what came before either. Eighteen hours
+// is still eighteen hours of a twenty-four hour day, so the statement survives
+// being made of pieces.
 //
 // obs must be ordered by node then time; SightingsToday returns it that way so
 // this is a single pass.
@@ -154,47 +173,27 @@ func presenceFrom(obs []NodeSighting) map[string]time.Duration {
 	return out
 }
 
-// DueShots reports how many shots a node is owed right now.
+// observationGap is how long a node may vanish between polls and still be
+// counted as having been there the whole time.
 //
-// It returns the number of thresholds its accumulated presence has passed, so
-// the caller compares that against how many shots the node has actually had
-// today. Zero means "not yet" — either it has not been up long enough, or it
-// has not been seen at all today.
-func DueShots(present time.Duration, schedule []time.Duration) int {
-	n := 0
-	for _, threshold := range schedule {
-		if present < threshold {
-			break
-		}
-		n++
+// Sized against the refresh cadence: at a half-hour poll one MISSED poll leaves
+// a one-hour gap and two leave ninety minutes, so seventy forgives the first
+// and charges for the second. A poll can be late (a slow directory fetch, a
+// restarted prober) and charging a node for the prober's hiccup would be
+// measuring the wrong machine.
+const observationGap = 70 * time.Minute
+
+// slotsPerDay is how many slots a day holds, which is also the most tickets a
+// node can earn from one prober in a day.
+//
+// Derived rather than configured: the slot length already decides it, and a
+// second number saying the same thing is one that can disagree.
+func slotsPerDay(slotSec int) int {
+	if slotSec <= 0 {
+		slotSec = faucet.SlotSeconds
 	}
-	return n
-}
-
-// 🔴 THE PROBER DOES NOT SCORE. It counts: how many of the day's five tickets a
-// node earned, which is the number of passing shots on record. What a ticket is
-// WORTH is decided when the voucher is signed, from that count, by the RV — so
-// the curve lives there and nothing here has to be redeployed to change it.
-//
-// The temptation is to store points alongside each shot "while we know them".
-// It buys nothing and costs correctness: a stored figure is a second copy of
-// something the rows already say, and the two drift the moment the curve moves.
-// The rows are the record.
-
-// dueTargets picks the nodes whose next shot has come due.
-//
-// This replaces choosing at random: a node is fired at because it earned the
-// shot by being up, not because it was drawn. Load spreads on its own, since
-// nodes reach each threshold at whatever hour they happened to accumulate it.
-func dueTargets(targets []Target, present map[string]time.Duration, shotsToday map[string]int,
-	schedule []time.Duration) []Target {
-
-	var out []Target
-	for _, t := range targets {
-		due := DueShots(present[t.Node.ID], schedule)
-		if due > shotsToday[t.Node.ID] {
-			out = append(out, t)
-		}
+	if n := 86400 / slotSec; n > 0 {
+		return n
 	}
-	return out
+	return 1
 }

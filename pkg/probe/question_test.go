@@ -181,7 +181,7 @@ func TestBuildPrompt(t *testing.T) {
 		},
 	}
 	got := q.BuildPrompt()
-	want := "Give only the answer. No explanation. " +
+	want := "Give only the answer. No explanation. Answer in English. " +
 		"Q: What is the capital of France? A: Paris " +
 		"Q: Which continent is Japan in? A: Asia " +
 		"Q: Which continent contains Egypt? A:"
@@ -193,6 +193,12 @@ func TestBuildPrompt(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(got), "one word") {
 		t.Error(`"one word" phrasing truncates two-word answers`)
+	}
+	// 🔴 A multilingual node answered "澳元" for Australia's currency: right,
+	// and unscorable against a one-word English draft. The few-shot pair being
+	// English is a hint a Chinese-first model does not take.
+	if !strings.Contains(got, "Answer in English.") {
+		t.Error("the prompt must name the language it wants the answer in")
 	}
 }
 

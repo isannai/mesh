@@ -30,6 +30,13 @@ import (
 // encoding/json, so RV-side additions do not break this. Notably absent:
 // `online` and `status`. `online` is a *filter* on the RV side, not a field
 // (see Fetch), and per-service volatile state lives on /v1/metrics.
+// NodeVersions mirrors the RV's nested "version" object.
+type NodeVersions struct {
+	Station string `json:"station,omitempty"`
+	Isannd  string `json:"isannd,omitempty"`
+	Isann   string `json:"isann,omitempty"`
+}
+
 type Node struct {
 	ID   string `json:"id"`
 	Role string `json:"role,omitempty"`
@@ -41,13 +48,18 @@ type Node struct {
 	// That reset is the point: it is what "has been up continuously for N
 	// hours" can be measured against. RFC3339; absent when the node has no
 	// live control connection.
-	ConnectedAt  string    `json:"connected_at,omitempty"`
-	StartedAt    string    `json:"started_at,omitempty"`
-	Version      string    `json:"version,omitempty"`
-	OwnerAddress string    `json:"owner_address,omitempty"`
-	AuthMode     string    `json:"auth_mode,omitempty"`
-	TPMVerified  bool      `json:"tpm_verified,omitempty"`
-	Services     []Service `json:"services,omitempty"`
+	ConnectedAt string `json:"connected_at,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+	// Version is an OBJECT, not a string. A node is three separately deployed
+	// binaries — the backend app, the daemon and the CLI — and they drift: an
+	// operator who copies only isannd leaves an old CLI in place. One number
+	// used to be reported here (the backend's) and it moved for none of the
+	// others, so "I deployed it" and "the fix is not running" looked identical.
+	Version      NodeVersions `json:"version"`
+	OwnerAddress string       `json:"owner_address,omitempty"`
+	AuthMode     string       `json:"auth_mode,omitempty"`
+	TPMVerified  bool         `json:"tpm_verified,omitempty"`
+	Services     []Service    `json:"services,omitempty"`
 }
 
 // Connected parses ConnectedAt. ok=false when the node has no live control
@@ -70,11 +82,11 @@ func (n Node) Connected() (time.Time, bool) {
 // package ("llama", "vllm", "sd"), which is a different thing and not
 // interchangeable with it.
 type Service struct {
-	Name          string `json:"name"`
-	Type          string `json:"type,omitempty"`
-	Engine        string `json:"engine,omitempty"`
-	Model         string `json:"model,omitempty"`
-	ModelHash     string `json:"model_hash,omitempty"`
+	Name      string `json:"name"`
+	Type      string `json:"type,omitempty"`
+	Engine    string `json:"engine,omitempty"`
+	Model     string `json:"model,omitempty"`
+	ModelHash string `json:"model_hash,omitempty"`
 	// ModelArch is the architecture family the node itself declares —
 	// "sd15" / "sdxl" / "sd3" / "pony" / "flux", from the package.json that
 	// `isann model pull --arch` wrote. Empty for text engines, which have no

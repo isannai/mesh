@@ -445,6 +445,34 @@ func (s *Store) ShotCountsToday(dayStart time.Time) (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// ShotCountsInSlot returns shots-so-far per node for one slot.
+//
+// Keyed on assign_epoch rather than on a time range. The epoch is stamped on
+// the row when the shot is fired, so this asks "did we already serve this node
+// under this root" — which is the question the one-per-slot rule is actually
+// made of. A time range would answer it too, until a clock adjustment or a slot
+// length change moved the boundary underneath rows already written.
+//
+// Rows fired before the column existed carry 0 and are counted as belonging to
+// no slot, which is right: they cannot be claimed against this root either.
+func (s *Store) ShotCountsInSlot(epoch int64) (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT node_id, COUNT(*) FROM shot WHERE assign_epoch=? GROUP BY node_id`, epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // PendingShots lists shots that were accepted but whose result is not in hand
 // yet — the ones a later round comes back for.
 //
@@ -458,8 +486,14 @@ func (s *Store) ShotCountsToday(dayStart time.Time) (map[string]int, error) {
 // limit, so they are the ones worth asking about while the answer still exists.
 func (s *Store) PendingShots() ([]Shot, error) {
 	rows, err := s.db.Query(
+		// 🔴 assign_root comes back with the row. The image track judges a shot
+		// in a LATER round than the one that fired it, and the receipt it writes
+		// has to name the slot the work was done under — the current slot may
+		// already be a different one. Leaving the column out here silently
+		// produced tickets that were never written at all.
 		`SELECT id,fired_at,node_id,node_addr,job_id,service,model,
-		        COALESCE(question_id,0), COALESCE(order_json,''), COALESCE(answer_raw,'')
+		        COALESCE(question_id,0), COALESCE(order_json,''), COALESCE(answer_raw,''),
+		        COALESCE(assign_epoch,0), COALESCE(assign_root,'')
 		   FROM shot
 		  WHERE outcome=? AND job_id<>'' ORDER BY fired_at`, OutcomeSubmitted)
 	if err != nil {
@@ -471,7 +505,8 @@ func (s *Store) PendingShots() ([]Shot, error) {
 		var sh Shot
 		var firedMs int64
 		if err := rows.Scan(&sh.ID, &firedMs, &sh.NodeID, &sh.NodeAddr, &sh.JobID, &sh.Service,
-			&sh.Model, &sh.QuestionID, &sh.OrderJSON, &sh.AnswerRaw); err != nil {
+			&sh.Model, &sh.QuestionID, &sh.OrderJSON, &sh.AnswerRaw,
+			&sh.AssignEpoch, &sh.AssignRoot); err != nil {
 			return nil, err
 		}
 		sh.FiredAt = time.UnixMilli(firedMs)

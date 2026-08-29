@@ -15,8 +15,8 @@ import (
 	"github.com/isannai/mesh/pkg/engine/manifest"
 	"github.com/isannai/mesh/pkg/glog"
 	"github.com/isannai/mesh/pkg/installclient"
-	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/tunnel"
 	"github.com/quic-go/quic-go"
 )
@@ -39,9 +39,12 @@ type Provider struct {
 
 	// Register delta tracking — keeps last-sent snapshot of static fields so
 	// subsequent registers can omit unchanged ones.
-	regMu       sync.Mutex
-	regSeq      uint64
-	regSent     bool // true after first FullSync sent
+	regMu   sync.Mutex
+	regSeq  uint64
+	regSent bool // true after first FullSync sent
+	// lastMetrics is the previous metrics summary, kept only to avoid logging
+	// the same line every second. See pushMetricsBatch.
+	lastMetrics string
 	lastEmblem  string
 	lastVersion string
 	lastBinHash string
@@ -566,4 +569,3 @@ func (p *Provider) HandleServiceProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-

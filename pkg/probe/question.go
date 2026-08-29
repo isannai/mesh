@@ -118,7 +118,7 @@ func decodeFewshot(s string) []QA {
 
 // BuildPrompt assembles what actually goes to the node.
 //
-//	Give only the answer. No explanation. Q: <ex1> A: <a1> Q: <ex2> A: <a2> Q: <target> A:
+//	Give only the answer. No explanation. Answer in English. Q: <ex1> A: <a1> Q: <ex2> A: <a2> Q: <target> A:
 //
 // Space-joined on one line, not newline-joined — this is the form that was
 // measured, and the stop sequence "\n" depends on the model producing the first
@@ -127,9 +127,25 @@ func decodeFewshot(s string) []QA {
 // The lead-in is "Give only the answer", NOT "Answer with one word only":
 // the one-word phrasing truncated legitimate two-word answers like
 // "South America" and "New Delhi", failing honest nodes.
+//
+// 🔴 WHY THE LANGUAGE IS NAMED. A multilingual model answers in whichever
+// language it leans towards — a node asked for Australia's currency replied
+// "澳元", which is right and unscorable: the draft is one English word and
+// score.go compares word sets, so a correct answer in another script cannot
+// match anything. The few-shot pair is English, but that is a hint and not one
+// a Chinese-first model takes.
+//
+// A THIRD SENTENCE rather than a rewrite of the lead-in. "Give only the answer"
+// is the phrasing that was measured, and folding "in English" into it would put
+// that measurement back in play for a rule about language, not about length.
+//
+// In the PROMPT, not in a `system` parameter. buildRun only sends what the
+// node's run-schema declares (fire.go), so a system message would reach the
+// engines that declare one and skip the rest — different nodes judged under
+// different instructions, which is the one thing a comparison cannot have.
 func (q Question) BuildPrompt() string {
 	var b strings.Builder
-	b.WriteString("Give only the answer. No explanation. ")
+	b.WriteString("Give only the answer. No explanation. Answer in English. ")
 	for _, ex := range q.Fewshot {
 		b.WriteString("Q: ")
 		b.WriteString(ex.Q)

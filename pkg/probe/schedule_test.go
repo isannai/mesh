@@ -4,51 +4,149 @@ import (
 	"testing"
 	"time"
 
+	"github.com/isannai/mesh/pkg/faucet"
 	"github.com/isannai/mesh/pkg/rvnodes"
 )
 
-// hrs builds a ladder from HOURS, the unit the tests were written in.
-// The config now takes seconds, so convert on the way in.
-func hrs(v ...float64) []time.Duration { return parseScheduleSec(hoursToSec(v)) }
+const testEpoch = int64(165553)
 
-// The ladder is the whole point: six scattered shots would prove "alive six
-// times", while thresholds that keep climbing prove "there for most of the day".
-func TestDueShots(t *testing.T) {
-	sch := hrs(3, 6, 9, 12, 15)
+func testAssign(slotSec int) Assignment {
+	return Assignment{SlotSec: slotSec, Epoch: testEpoch}
+}
 
-	cases := []struct{ up, want float64 }{
-		{0, 0}, {2.9, 0}, {3, 1}, {5.9, 1}, {6, 2}, {8.9, 2},
-		{9, 3}, {11.9, 3}, {12, 4}, {15, 5}, {30, 5},
+func slotStartOf(a Assignment) time.Time {
+	return time.Unix(faucet.SlotStartAt(a.Epoch, a.SlotSec), 0)
+}
+
+// Both edges of a slot are unusable — the opening because the root has just
+// been replaced, the closing because a verdict landing after the turnover has
+// no membership proof left to be claimed with.
+func TestFireWindow(t *testing.T) {
+	start, end := fireWindow(10800, 30*time.Minute, 30*time.Minute)
+	if start != 30*time.Minute {
+		t.Errorf("window opens at %s, want 30m", start)
 	}
-	for _, c := range cases {
-		present := time.Duration(c.up * float64(time.Hour))
-		if got := DueShots(present, sch); got != int(c.want) {
-			t.Errorf("after %.1fh present: due = %d, want %.0f", c.up, got, c.want)
-		}
+	if end != 150*time.Minute {
+		t.Errorf("window closes at %s, want 2h30m", end)
 	}
 
-	// Never seen today ⇒ nothing is owed. Zero must not read as "due
-	// everything", which is what a naive comparison against an empty value gives.
-	if got := DueShots(0, sch); got != 0 {
-		t.Errorf("never seen: due = %d, want 0", got)
+	// Zero is an operator saying "use the whole slot", and is honoured.
+	if s, e := fireWindow(10800, 0, 0); s != 0 || e != 3*time.Hour {
+		t.Errorf("open window = [%s %s], want [0 3h]", s, e)
 	}
 }
 
-// An out-of-order list would make a later shot come due before an earlier one
-// and the counter would run backwards.
-func TestParseScheduleSortsAndDefaults(t *testing.T) {
-	got := parseScheduleSec(hoursToSec([]float64{8, 1, 13, 3, 5}))
-	want := []time.Duration{time.Hour, 3 * time.Hour, 5 * time.Hour, 8 * time.Hour, 13 * time.Hour}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("schedule = %v, want %v", got, want)
-		}
+// 🔴 A slot too short to hold both dead zones must not leave nothing to fire
+// in. Silence is indistinguishable from an unappointed prober, so the window
+// collapses to an instant rather than to nothing.
+func TestFireWindowCollapsesRatherThanVanishing(t *testing.T) {
+	start, end := fireWindow(60, 30*time.Minute, 30*time.Minute)
+	if start != end {
+		t.Fatalf("window = [%s %s], want a single instant", start, end)
 	}
-	if len(parseScheduleSec(nil)) != len(DefaultSchedule) {
-		t.Error("an empty list should fall back to the default")
+	if start != 30*time.Second {
+		t.Errorf("collapsed to %s, want the slot midpoint 30s", start)
 	}
-	if len(parseScheduleSec([]float64{0, -1})) != len(DefaultSchedule) {
-		t.Error("a list of non-positive values should fall back to the default")
+	if start < 0 || start > time.Minute {
+		t.Errorf("collapsed to %s, which is outside the slot", start)
+	}
+}
+
+// Firing starts when the window opens, not at the slot boundary.
+func TestDueTargetsWaitsForTheWindow(t *testing.T) {
+	a := testAssign(10800)
+	lead, tail := 30*time.Minute, 30*time.Minute
+	targets := eligible([]rvnodes.Node{
+		node("n", "203.0.113.1:1", "public", true),
+	}, nil)
+	start := slotStartOf(a)
+
+	if due := dueTargets(targets, start, a, nil, lead, tail); len(due) != 0 {
+		t.Errorf("fired at the slot boundary: %+v", due)
+	}
+	if due := dueTargets(targets, start.Add(29*time.Minute), a, nil, lead, tail); len(due) != 0 {
+		t.Errorf("fired inside the opening dead zone: %+v", due)
+	}
+	if due := dueTargets(targets, start.Add(30*time.Minute), a, nil, lead, tail); len(due) != 1 {
+		t.Error("not due the moment the window opened")
+	}
+}
+
+// 🔴 THE HOLE THIS CLOSES. Only the opening edge used to be checked, so a node
+// the round could not reach stayed due for the rest of the slot and was
+// eventually fired at inside the tail — the exact case the tail exists to
+// prevent, and the one that produced "slot turned over before the verdict".
+func TestDueTargetsStopsAtTheTail(t *testing.T) {
+	a := testAssign(10800)
+	lead, tail := 30*time.Minute, 30*time.Minute
+	targets := eligible([]rvnodes.Node{
+		node("n", "203.0.113.1:1", "public", true),
+	}, nil)
+	start := slotStartOf(a)
+
+	if due := dueTargets(targets, start.Add(150*time.Minute), a, nil, lead, tail); len(due) != 1 {
+		t.Error("the last minute of the window should still fire")
+	}
+	if due := dueTargets(targets, start.Add(151*time.Minute), a, nil, lead, tail); len(due) != 0 {
+		t.Errorf("fired inside the closing dead zone: %+v", due)
+	}
+	if due := dueTargets(targets, start.Add(179*time.Minute), a, nil, lead, tail); len(due) != 0 {
+		t.Errorf("fired at the very end of the slot: %+v", due)
+	}
+}
+
+// 🔴 A CONCURRENCY LIMIT IS NOT A BATCH LIMIT. Thirty-two groups used to go out
+// in one round, sixteen at a time, and the round just took twice as long — the
+// whole directory answering inside one minute.
+func TestTakeBatch(t *testing.T) {
+	items := []int{1, 2, 3, 4, 5}
+	if got := takeBatch(items, 2); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Errorf("takeBatch(5, 2) = %v, want the first two in order", got)
+	}
+	if got := takeBatch(items, 5); len(got) != 5 {
+		t.Errorf("an exact fit should pass through whole, got %v", got)
+	}
+	if got := takeBatch(items, 99); len(got) != 5 {
+		t.Errorf("a batch larger than the input should pass through whole, got %v", got)
+	}
+	// Zero would silently stop the prober, which reads as a broken schedule.
+	if got := takeBatch(items, 0); len(got) != 5 {
+		t.Errorf("a non-positive batch should not swallow the round, got %v", got)
+	}
+	if got := takeBatch([]int(nil), 3); len(got) != 0 {
+		t.Errorf("nothing in, nothing out, got %v", got)
+	}
+}
+
+// One slot yields one ticket, so it may yield only one shot. The count comes
+// from the database, so a prober that restarted mid-slot still knows.
+func TestDueTargetsFiresOncePerSlot(t *testing.T) {
+	a := testAssign(10800)
+	lead, tail := 30*time.Minute, 30*time.Minute
+	targets := eligible([]rvnodes.Node{
+		node("ready", "203.0.113.1:1", "public", true),
+		node("done", "203.0.113.2:1", "public", true),
+	}, nil)
+
+	// Past every offset in the window, so only the shot count separates them.
+	now := slotStartOf(a).Add(150 * time.Minute)
+	due := dueTargets(targets, now, a, map[string]int{"done": 1}, lead, tail)
+	if len(due) != 1 || due[0].Node.ID != "ready" {
+		t.Fatalf("due = %+v, want only the node not yet served this slot", due)
+	}
+}
+
+// The denominator on the ticket log line, and the most a node can earn from one
+// prober in a day. Derived from the slot length so the two cannot disagree.
+func TestSlotsPerDay(t *testing.T) {
+	if got := slotsPerDay(10800); got != 8 {
+		t.Errorf("slotsPerDay(3h) = %d, want 8", got)
+	}
+	if got := slotsPerDay(0); got != 8 {
+		t.Errorf("slotsPerDay(unset) = %d, want the default 8", got)
+	}
+	if got := slotsPerDay(200000); got != 1 {
+		t.Errorf("slotsPerDay(longer than a day) = %d, want 1", got)
 	}
 }
 
@@ -89,35 +187,6 @@ func TestPresenceSurvivesARealAbsence(t *testing.T) {
 	}
 }
 
-// The case that started this: four tickets earned, a two-hour break, then three
-// hours back. Cumulatively that is 15h and the fifth ticket is owed.
-//
-// 🔴 Under the old anchor rule the break reset everything, so those first twelve
-// hours were gone and the fifth ticket was out of reach for the rest of the day.
-func TestPresenceAcrossABreakStillReachesTheTop(t *testing.T) {
-	sch := hrs(3, 6, 9, 12, 15)
-	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
-
-	var obs []NodeSighting
-	for h := 0; h <= 12; h++ { // 12h present
-		obs = append(obs, NodeSighting{"a", base.Add(time.Duration(h) * time.Hour)})
-	}
-	if got := DueShots(presenceFrom(obs)["a"], sch); got != 4 {
-		t.Fatalf("after 12h: due = %d, want 4", got)
-	}
-	back := base.Add(14 * time.Hour) // two hours away
-	for h := 0; h <= 3; h++ {
-		obs = append(obs, NodeSighting{"a", back.Add(time.Duration(h) * time.Hour)})
-	}
-	if got := presenceFrom(obs)["a"]; got != 15*time.Hour {
-		t.Fatalf("present = %s, want 15h", got)
-	}
-	if got := DueShots(presenceFrom(obs)["a"], sch); got != 5 {
-		t.Errorf("after the break: due = %d, want 5 — the break costs its own "+
-			"two hours and nothing more", got)
-	}
-}
-
 func TestPresencePerNode(t *testing.T) {
 	base := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 	obs := []NodeSighting{
@@ -137,30 +206,6 @@ func TestPresencePerNode(t *testing.T) {
 	}
 	if len(presenceFrom(nil)) != 0 {
 		t.Error("no sightings should give no presence")
-	}
-}
-
-// A node is fired at because it EARNED the shot, not because it was drawn.
-func TestDueTargets(t *testing.T) {
-	sch := hrs(3, 6, 9, 12, 15)
-
-	targets := eligible([]rvnodes.Node{
-		node("up", "203.0.113.1:1", "public", true),
-		node("fresh", "203.0.113.2:1", "public", true),
-		node("done", "203.0.113.3:1", "public", true),
-		node("unseen", "203.0.113.4:1", "public", true),
-	}, nil)
-	present := map[string]time.Duration{
-		"up":    7 * time.Hour,    // 2 thresholds crossed, 1 shot taken
-		"fresh": 30 * time.Minute, // not past the first threshold
-		"done":  7 * time.Hour,    // 2 crossed, already had 3 (config changed under it)
-		// "unseen" has no presence at all
-	}
-	shots := map[string]int{"up": 1, "done": 3}
-
-	due := dueTargets(targets, present, shots, sch)
-	if len(due) != 1 || due[0].Node.ID != "up" {
-		t.Fatalf("due = %+v, want only the node owed a shot", due)
 	}
 }
 

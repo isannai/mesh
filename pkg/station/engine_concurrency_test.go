@@ -33,17 +33,17 @@ WORDS=abc
 		key  string
 		want int
 	}{
-		{"PARALLEL", 5},      // plain int
-		{"MAX_NUM_SEQS", 8},  // double-quoted
-		{"THREADS", 4},       // export prefix
-		{"QUOTED", 3},        // single-quoted
-		{"INLINE", 6},        // inline trailing comment stripped
-		{"ZERO", 0},          // 0 → "no opinion"
-		{"NEG", 0},           // negative rejected
-		{"EMPTY", 0},         // empty value
-		{"WORDS", 0},         // non-int
-		{"PROFILE_NAME", 0},  // non-int string
-		{"MISSING", 0},       // key absent
+		{"PARALLEL", 5},     // plain int
+		{"MAX_NUM_SEQS", 8}, // double-quoted
+		{"THREADS", 4},      // export prefix
+		{"QUOTED", 3},       // single-quoted
+		{"INLINE", 6},       // inline trailing comment stripped
+		{"ZERO", 0},         // 0 → "no opinion"
+		{"NEG", 0},          // negative rejected
+		{"EMPTY", 0},        // empty value
+		{"WORDS", 0},        // non-int
+		{"PROFILE_NAME", 0}, // non-int string
+		{"MISSING", 0},      // key absent
 	}
 	for _, tc := range cases {
 		if got := readEnvInt(path, tc.key); got != tc.want {

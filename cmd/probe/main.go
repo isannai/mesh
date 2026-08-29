@@ -72,8 +72,9 @@ func main() {
 	}
 	defer p.Close()
 
-	log.Printf("[probe] isannd=%s db=%s schedule=%vs fire=%ds",
-		cfg.NodeBridgeAddr, cfg.DB, cfg.Schedule(), cfg.FireIntervalSec)
+	log.Printf("[probe] isannd=%s db=%s refresh=%ds fire=%ds window=+%s..-%s of slot",
+		cfg.NodeBridgeAddr, cfg.DB, cfg.RefreshSec, cfg.FireIntervalSec,
+		cfg.FireLead(), cfg.FireTail())
 	// Printed rather than left to be discovered: which nodes write the
 	// questions and which judge the images is the setting most likely to be
 	// wrong, and its symptom otherwise is a silent fallback to arithmetic.

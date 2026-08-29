@@ -158,58 +158,88 @@ func TestLegacyResponseDeadlineKey(t *testing.T) {
 	})
 }
 
-// The ladder is configured in SECONDS. Hours cannot express a smoke test:
-// ten seconds is 0.00277 hours, which nobody can read and everybody mistypes.
-func TestScheduleSeconds(t *testing.T) {
-	t.Run("default is the real ladder", func(t *testing.T) {
+// The dead zones are configured in SECONDS, for the reason the ladder they
+// replaced was: production wants half an hour and a smoke test wants ten
+// seconds, and only one of those is writable in both units.
+func TestFireWindowConfig(t *testing.T) {
+	t.Run("defaults are half an hour at each end", func(t *testing.T) {
 		cfg, err := LoadConfig(writeConfig(t, `{}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := parseScheduleSec(cfg.Schedule())
-		want := DefaultSchedule
-		if len(got) != len(want) {
-			t.Fatalf("got %v, want %v", got, want)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("got %v, want %v", got, want)
-			}
+		if cfg.FireLead() != DefaultFireLead || cfg.FireTail() != DefaultFireTail {
+			t.Errorf("window = +%s..-%s, want +%s..-%s",
+				cfg.FireLead(), cfg.FireTail(), DefaultFireLead, DefaultFireTail)
 		}
 	})
 
 	t.Run("seconds are seconds", func(t *testing.T) {
-		cfg, err := LoadConfig(writeConfig(t, `{"schedule_sec":[10,20,30]}`))
+		cfg, err := LoadConfig(writeConfig(t, `{"fire_lead_sec":10,"fire_tail_sec":20}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := parseScheduleSec(cfg.Schedule())
-		if len(got) != 3 || got[0] != 10*time.Second || got[2] != 30*time.Second {
-			t.Fatalf("got %v", got)
+		if cfg.FireLead() != 10*time.Second || cfg.FireTail() != 20*time.Second {
+			t.Errorf("window = +%s..-%s, want +10s..-20s", cfg.FireLead(), cfg.FireTail())
 		}
 	})
 
-	// Configs are already deployed with the hours spelling; dropping it would
-	// silently reset an operator's ladder to the default.
-	t.Run("legacy hours still work", func(t *testing.T) {
-		cfg, err := LoadConfig(writeConfig(t, `{"schedule_hours":[1,3]}`))
+	// Zero is an operator saying "use the whole slot", which is a real setting.
+	// A negative is a typo, and honouring it would place the window outside the
+	// slot entirely.
+	t.Run("zero is honoured, negative falls back", func(t *testing.T) {
+		cfg, err := LoadConfig(writeConfig(t, `{"fire_lead_sec":0,"fire_tail_sec":-5}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := parseScheduleSec(cfg.Schedule())
-		if len(got) != 2 || got[0] != time.Hour || got[1] != 3*time.Hour {
-			t.Fatalf("got %v, want [1h 3h]", got)
+		if cfg.FireLead() != 0 {
+			t.Errorf("lead = %s, want 0", cfg.FireLead())
+		}
+		if cfg.FireTail() != DefaultFireTail {
+			t.Errorf("tail = %s, want the default %s", cfg.FireTail(), DefaultFireTail)
 		}
 	})
 
-	t.Run("seconds win over hours", func(t *testing.T) {
-		cfg, err := LoadConfig(writeConfig(t, `{"schedule_hours":[1,3],"schedule_sec":[5]}`))
+	// 🔴 A CONCURRENCY LIMIT IS NOT A BATCH LIMIT. Thirty-two groups used to
+	// go out in one round, sixteen at a time, and the round just took twice as
+	// long — the whole directory answering inside one minute.
+	t.Run("batch sizes default and clamp", func(t *testing.T) {
+		cfg, err := LoadConfig(writeConfig(t, `{}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := parseScheduleSec(cfg.Schedule())
-		if len(got) != 1 || got[0] != 5*time.Second {
-			t.Fatalf("got %v, want [5s]", got)
+		if g, i := cfg.Batch(); g != DefaultSubnetsPerRound || i != DefaultImagesPerRound {
+			t.Errorf("batch = %d/%d, want %d/%d", g, i, DefaultSubnetsPerRound, DefaultImagesPerRound)
+		}
+
+		cfg, err = LoadConfig(writeConfig(t, `{"subnets_per_round":3,"images_per_round":1}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g, i := cfg.Batch(); g != 3 || i != 1 {
+			t.Errorf("batch = %d/%d, want 3/1", g, i)
+		}
+
+		// Zero would stop the prober silently, which reads as a broken
+		// schedule rather than as a setting.
+		cfg, err = LoadConfig(writeConfig(t, `{"subnets_per_round":0,"images_per_round":-2}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g, i := cfg.Batch(); g != DefaultSubnetsPerRound || i != DefaultImagesPerRound {
+			t.Errorf("batch = %d/%d, want the defaults", g, i)
+		}
+	})
+
+	// The directory is read to learn slot membership, which does not change
+	// inside a slot. Polling it by the minute asked the RV one question a
+	// hundred and eighty times.
+	t.Run("directory refresh is half an hour", func(t *testing.T) {
+		cfg, err := LoadConfig(writeConfig(t, `{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.RefreshSec != 1800 {
+			t.Errorf("RefreshSec = %d, want 1800", cfg.RefreshSec)
 		}
 	})
 }

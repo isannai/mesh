@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
@@ -69,8 +70,10 @@ func Score(q Question, answer string, completionTokens int) string {
 //
 // 🔴 This gate is what makes containment usable at all. Without a cap, a node
 // that answers with a list of the world's capitals contains the draft for every
-// geography question and passes them all with no knowledge whatsoever —
-// probeMaxTokens is 64, which is room for about fifty words.
+// geography question and passes them all with no knowledge whatsoever. And the
+// token cap is no help: probeMaxTokens is 16, room for a dozen words, and
+// buildRun only sends it to engines that declare max_tokens (fire.go), so on
+// the rest there is no ceiling on the answer at all.
 //
 // Two, and it stays tight because the salad bites hardest where the answer
 // space is SMALL. Capitals have hundreds of answers, so even a six-word list
@@ -132,6 +135,38 @@ func subset(a, b []string) bool {
 // one had the accent.
 var foldDiacritics = transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
 
+// answerLabelMax is how far into a reply the label's colon may sit. "answer"
+// is six bytes; the slack is for a stray space.
+const answerLabelMax = 8
+
+// stripAnswerLabel removes an echoed "A:" or "Answer:" from the front of a reply.
+//
+// The prompt ends in "A:" and the node is meant to CONTINUE it. An engine that
+// applies a chat template instead treats the whole prompt as a question and
+// starts a fresh reply, so the label comes back doubled: "A:澳元" where the
+// answer is "澳元". That label is our own text returning, and counting it
+// charges the node a word it never chose — out of the two that maxExtraWords
+// allows.
+//
+// Stripped HERE and not at collection: answer_raw keeps exactly what the node
+// sent, because that is what makes a disputed shot re-examinable later.
+//
+// The colon may be the full-width "：" — an engine that echoes the label is
+// often the one typing CJK punctuation to begin with.
+func stripAnswerLabel(s string) string {
+	t := strings.TrimSpace(s)
+	i := strings.IndexAny(t, ":：")
+	if i <= 0 || i > answerLabelMax {
+		return s
+	}
+	switch strings.ToLower(strings.TrimSpace(t[:i])) {
+	case "a", "answer":
+		_, w := utf8.DecodeRuneInString(t[i:])
+		return t[i+w:]
+	}
+	return s
+}
+
 // words normalises text into comparable tokens.
 //
 // Only the FIRST LINE is read. The stop sequence usually ends generation there,
@@ -141,6 +176,8 @@ func words(s string) []string {
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]
 	}
+	// Before anything else: an echoed "A:" is not a word the node chose.
+	s = stripAnswerLabel(s)
 	// Accents come off before the lowercasing, so "É" and "e" meet in the
 	// middle. A transform failure leaves the text as it was — a comparison on
 	// the original beats refusing to score at all.

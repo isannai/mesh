@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/isannai/mesh/pkg/auth"
 	"github.com/isannai/mesh/pkg/tunnel"
-	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // newWallet 은 테스트용 진짜 지갑을 하나 만든다 — secp256k1 키쌍을 생성해

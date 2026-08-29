@@ -164,4 +164,3 @@ func loadActiveProfileValues(svc setup.ServiceEntry, providerCfgPath string) map
 func loadInspectManifest(svc setup.ServiceEntry, providerCfgPath, packagesDir string) *manifest.Manifest {
 	return loadServiceManifest(svc, packagesDir)
 }
-

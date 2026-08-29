@@ -20,8 +20,8 @@ import (
 
 	"github.com/isannai/mesh/pkg/auth"
 	"github.com/isannai/mesh/pkg/engine/manifest"
-	"github.com/isannai/mesh/pkg/station/queue"
 	"github.com/isannai/mesh/pkg/setup"
+	"github.com/isannai/mesh/pkg/station/queue"
 )
 
 // clampTimeoutSecs parses a ?timeout=<seconds> value and clamps it to a sane
@@ -90,10 +90,10 @@ func (h *JobsHandler) apiSpec(service string) *manifest.APISpec {
 //	GET  /outputs/{filename}     — disk file stream (Storage-backed)
 //	GET  /v1/queue/stats?service=NAME — single-service queue stats
 func (h *JobsHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/jobs", h.handleSubmit)        // POST
-	mux.HandleFunc("/v1/jobs/", h.handleByID)         // GET (id, id/result)
-	mux.HandleFunc("/outputs/", h.handleOutputs)      // GET
-	mux.HandleFunc("/v1/queue/stats", h.handleStats)  // GET
+	mux.HandleFunc("/v1/jobs", h.handleSubmit)       // POST
+	mux.HandleFunc("/v1/jobs/", h.handleByID)        // GET (id, id/result)
+	mux.HandleFunc("/outputs/", h.handleOutputs)     // GET
+	mux.HandleFunc("/v1/queue/stats", h.handleStats) // GET
 }
 
 // submitRequest is the POST /v1/jobs body shape.

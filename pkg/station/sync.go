@@ -20,11 +20,11 @@ import (
 type syncManager struct {
 	mu          sync.Mutex
 	snapshots   map[string]*SyncSnapshot // token → snapshot
-	creating    bool                      // true while snapshot is being created
-	lastError   string                    // error from last create attempt
-	progress    int                       // files hashed so far
-	total       int                       // total files to hash
-	currentFile string                    // file currently being hashed
+	creating    bool                     // true while snapshot is being created
+	lastError   string                   // error from last create attempt
+	progress    int                      // files hashed so far
+	total       int                      // total files to hash
+	currentFile string                   // file currently being hashed
 }
 
 // SyncSnapshot represents a point-in-time snapshot of the WorkDir.
@@ -405,7 +405,6 @@ func hashFile(path string) (string, error) {
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
-
 
 // ProcessInfo is used to check running processes before snapshot creation.
 type ProcessInfo struct {
