@@ -115,10 +115,26 @@ type Config struct {
 	// to migrate configs already in the field — GeneratorService wins when both
 	// are set.
 	QuestionGeneratorService string `json:"question_generator_service,omitempty"`
+	// ImageTrack turns the image probe on. Default OFF, and naming `clips` is
+	// no longer enough by itself.
+	//
+	// 🔴 The faucet grades TEXT ONLY. An image node earns nothing, so a shot
+	// fired at one spends someone's GPU for a ticket that is not wanted. The
+	// decision is in GLink docs/TODO/20260831/infer-billing.md (D12/D13):
+	// images are out of faucet membership entirely, and the rendezvous already
+	// leaves an image-only node out of every group.
+	//
+	// The track is kept rather than deleted (D15) because the design behind it
+	// is intact and the economics may change. Until then it must not run by
+	// accident: an operator who copies a config with `clips` in it would
+	// otherwise start firing image probes without deciding to.
+	ImageTrack bool `json:"image_track"`
 	// Clips are the CLIP validators that judge image probes, same rules as
 	// Generators. Absent or empty both mean the image track is NOT run:
 	// unlike questions there is no code-generated fallback, and firing at an
 	// image node with no judge waiting only burns someone else's GPU.
+	//
+	// Necessary but no longer sufficient — see ImageTrack.
 	Clips *[]string `json:"clips,omitempty"`
 	// ClipService is the service name for clip entries that do not name one.
 	ClipService string `json:"clip_service"`
@@ -447,6 +463,13 @@ func applyEnvOverrides(cfg *Config) {
 	case "true", "1", "yes":
 		cfg.FireAtSelf = true
 	}
+	// Same one-way rule, and for the same reason: firing at image nodes costs
+	// them GPU for a ticket the faucet does not grade, so it is opted into
+	// explicitly or not at all.
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PROBE_IMAGE_TRACK"))) {
+	case "true", "1", "yes":
+		cfg.ImageTrack = true
+	}
 }
 
 // Prober holds the running state.
@@ -769,10 +792,12 @@ func (p *Prober) Refresh() {
 	// prober's group". The fix lives in a different place for each.
 	fireable := eligible(nodes, p.exclude)
 	p.targets = p.assignedTargets(fireable)
-	// Image targets only when there is a judge. Ordering a picture with no
+	// Image targets only when the track is switched on AND there is a judge.
+	// The faucet grades text only, so this is off unless an operator asked for
+	// it (Config.ImageTrack); and even then, ordering a picture with no
 	// validator to look at it burns someone else's GPU for a result that gets
 	// thrown away — see image.go.
-	if p.validator.Enabled() {
+	if p.cfg.ImageTrack && p.validator.Enabled() {
 		p.imgTargets = p.assignedTargets(imageTargets(nodes, p.exclude))
 	} else {
 		p.imgTargets = nil

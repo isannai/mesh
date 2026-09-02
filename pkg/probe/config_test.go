@@ -266,3 +266,44 @@ func TestPoolEnvOverrides(t *testing.T) {
 		t.Fatalf("got %+v, want nothing for PROBE_GENERATORS=none", got)
 	}
 }
+
+// The faucet grades text only, so naming CLIP validators must not be enough to
+// start firing at image nodes. An operator copying a config with `clips` in it
+// would otherwise spend other people's GPUs on tickets nobody wants.
+func TestImageTrackIsOffUnlessAskedFor(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `{"clips":["0xc"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ImageTrack {
+		t.Fatal("clips alone switched the image track on")
+	}
+
+	cfg, err = LoadConfig(writeConfig(t, `{"clips":["0xc"],"image_track":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ImageTrack {
+		t.Fatal("image_track:true was ignored")
+	}
+
+	// One-way through the environment, like PROBE_FIRE_AT_SELF: a typo must
+	// never quietly enable it, and nothing there turns it back off.
+	t.Setenv("PROBE_IMAGE_TRACK", "yes")
+	cfg, err = LoadConfig(writeConfig(t, `{"clips":["0xc"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ImageTrack {
+		t.Fatal("PROBE_IMAGE_TRACK=yes was ignored")
+	}
+
+	t.Setenv("PROBE_IMAGE_TRACK", "off")
+	cfg, err = LoadConfig(writeConfig(t, `{"clips":["0xc"],"image_track":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ImageTrack {
+		t.Fatal("a value the environment does not understand turned the track off")
+	}
+}
