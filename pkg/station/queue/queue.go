@@ -26,6 +26,25 @@ type Config struct {
 	Disabled    bool              // when true, this service bypasses the queue entirely — Submit/dequeue/runJob never run
 	Events      *glog.EventWriter // optional — emits job.received/started/completed/failed
 
+	// CleanupHook runs just before a job is dropped by TTL or LRU eviction,
+	// while the Job is still readable. Storage.Cleanup goes here so the
+	// on-disk result dies with the record that names its owner.
+	//
+	// 🔴 THE TWO LIFETIMES MUST MATCH. With SaveToDisk on, Save() drops the
+	// body from memory and the file becomes the ONLY copy, reachable at
+	// /outputs/{service}_{jobID}.{ext}. Evict the job but keep the file and
+	// handleOutputs can no longer find the record carrying SubmitterAddress,
+	// so it serves the file to anyone who knows the name — its ownership
+	// check is `job != nil && !authorizeJob(...)`, which falls through on a
+	// nil job. Startup CleanupOrphans only sweeps at boot, so that window
+	// stayed open until the next restart.
+	//
+	// Passed through Config rather than set afterwards: Manager builds every
+	// queue from a factory that returns a Config, so a post-construction
+	// SetCleanupHook has no seam there. That is why the hook was defined,
+	// documented, unit-tested, and never actually installed in production.
+	CleanupHook func(*Job)
+
 	// OnJobChange fires after every job state transition (queued / started
 	// / completed / failed). The provider wires this to NotifyJobChange so
 	// the heartbeat loop flushes immediately. Called outside the queue
@@ -111,6 +130,7 @@ func New(cfg Config) *Queue {
 		cfg:         cfg.withDefaults(),
 		jobs:        make(map[string]*Job),
 		running:     make(map[string]*Job),
+		cleanupHook: cfg.CleanupHook,
 		events:      cfg.Events,
 		onJobChange: cfg.OnJobChange,
 	}

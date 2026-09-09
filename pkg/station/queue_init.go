@@ -74,6 +74,28 @@ func initQueueSubsystem(ctx context.Context, cfg tunnel.Config, packagesDir stri
 			perSvcStorage = storage
 		}
 
+		// 🔴 THE FILE DIES WITH THE JOB. Without this the queue's own gc (a
+		// one-minute ticker) drops the record while the result file stays on
+		// disk forever, and two things follow:
+		//
+		//   leak    nothing deletes it until the next restart, where
+		//           CleanupOrphans sweeps by mtime - and that only runs when
+		//           output_ttl_sec is set, which defaults to 0 (skip).
+		//   access  /outputs/{service}_{jobID}.{ext} answers from disk BEFORE
+		//           it needs the job, and its guard is
+		//           `job != nil && !authorizeJob(...)`. A nil job (evicted)
+		//           makes that false, so an orphaned file is served to anyone
+		//           who knows the name. SubmitterAddress lived on the record
+		//           that just went away.
+		//
+		// gc already calls the hook on both eviction paths (TTL and LRU) and
+		// Storage.Cleanup already removes job.ResponseFile - only the wiring
+		// was missing, so the whole mechanism was dead in production while its
+		// unit test (dispatcher_test.go) installed the hook by hand and passed.
+		if perSvcStorage != nil {
+			qcfg.CleanupHook = perSvcStorage.Cleanup
+		}
+
 		opts := queue.DispatchOptions{
 			Storage: perSvcStorage,
 		}

@@ -310,3 +310,62 @@ func TestWaitJobNotFound(t *testing.T) {
 		t.Error("expected not found error")
 	}
 }
+
+// 🔴 THE HOOK MUST ARRIVE THROUGH Config, NOT SetCleanupHook.
+//
+// Manager builds every production queue from a factory that hands back a
+// Config (manager.go: `cfg, process := m.factory(svc); q := New(cfg)`). There
+// is no seam there to call SetCleanupHook, which is why the hook was defined,
+// documented, and unit-tested while being nil in every running station:
+// dispatcher_test.go installs it by hand and passes, so nothing pointed at the
+// gap. A test that calls SetCleanupHook cannot fail when the wiring is missing.
+//
+// Both eviction paths are covered - TTL and LRU - because gc calls the hook
+// twice, once in each branch.
+func TestCleanupHookArrivesThroughConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		age  time.Duration // how far in the past EndedAt sits
+		jobs int
+	}{
+		{"TTL", Config{DoneTTL: time.Minute, MaxDone: 100}, 2 * time.Minute, 1},
+		{"LRU", Config{DoneTTL: time.Hour, MaxDone: 1}, 0, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var evicted []string
+			cfg := tc.cfg
+			cfg.ServiceName = "sd-api"
+			cfg.CleanupHook = func(j *Job) { evicted = append(evicted, j.ID) }
+			q := New(cfg)
+
+			var ids []string
+			for i := 0; i < tc.jobs; i++ {
+				job, err := q.Submit("/v1/images/generations", []byte(`{}`), http.Header{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ids = append(ids, job.ID)
+				q.mu.Lock()
+				q.jobs[job.ID].Status = StatusDone
+				q.jobs[job.ID].EndedAt = time.Now().Add(-tc.age - time.Duration(tc.jobs-i)*time.Second)
+				q.jobs[job.ID].ResponseFile = "/tmp/" + job.ID + ".png"
+				q.mu.Unlock()
+			}
+
+			q.gc()
+
+			if len(evicted) == 0 {
+				t.Fatal("cleanup hook never fired - Config.CleanupHook is not reaching the queue, " +
+					"so result files outlive the job that names their owner")
+			}
+			// The oldest is always the one that goes.
+			if evicted[0] != ids[0] {
+				t.Errorf("evicted %v, want the oldest (%s) first", evicted, ids[0])
+			}
+			if q.Get(evicted[0]) != nil {
+				t.Error("job survived gc")
+			}
+		})
+	}
+}
