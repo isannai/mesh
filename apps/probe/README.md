@@ -1,7 +1,7 @@
 # probe mesh
 
 The faucet prober. Asks public nodes a question, records the answer, and does
-nothing at all until it holds an appointment.
+nothing at all until the RV names this node a prober.
 
 ## Install
 
@@ -13,22 +13,21 @@ nothing at all until it holds an appointment.
 ```
 
 ```bash
-isann cred add --alias faucet --token ianprb_…   # the appointment
-isann mesh on probe --now                        # run now + on every boot
+isann mesh on probe --now     # run now + on every boot
 isann mesh status
 ```
 
-`isann mesh on` only starts it. **Without an appointment it stays idle** and
-logs one line saying so — the intended state for a node that has the mesh
-installed but has not been appointed.
+`isann mesh on` only starts it. **Unless the RV lists this node under `probers`
+in its `faucet.json`, it stays idle** and logs one line saying so — the intended
+state for a node that has the mesh installed but is not a prober.
 
 ## What it needs
 
 | | |
 |---|---|
 | isannd running | it calls the node-bridge for everything: discovery, NAT traversal and the HTTP/3 hop to the target all happen there |
-| an appointment | read from isannd, not from this config. `isann cred add` installs it, `isann cred list` shows it. **No wallet unlock needed** — the prober reads the one cred route isannd leaves ungated |
-| a signing key (recommended) | needed to sign tickets, and — already useful now — to check at boot that the appointment is bound to a key this node actually holds |
+| a slot assignment | the RV names its probers in `faucet.json`; every three-hour slot it publishes groups and a merkle root, and isannd hands this node its share. Nothing to install here, no wallet unlock |
+| a TPM | tickets are signed by the TPM key the RV recorded for this machine. No TPM, no tickets — checks are still recorded locally |
 | a question writer (optional) | an allied node that writes geography/animal/colour questions. Need not be this machine — see below. Without one it runs on arithmetic alone, which is the one category whose answers are certain |
 
 ## Who writes the questions
@@ -68,41 +67,24 @@ An allied node in `protected` mode is fine — isannd attaches the active
 inference-access credential (`isann cred add --kind infer`) to outbound `/svc`
 calls by itself, so there is nothing to configure here.
 
-Named nodes are automatically dropped from the target list, as is this node:
-a prober earning its own tickets measures nothing.
+This node is dropped from the target list: a prober earning its own tickets
+measures nothing. (`"fire_at_self": true` turns that off, for a single-machine
+test.) The writers are **not** dropped — arithmetic is generated here, fresh per
+shot, so an allied node still answers something it could not have prepared.
 
-## The signing key
+## The signing keys
 
-The appointment names exactly one address that may sign tickets, so **there is
-no key path to configure** — only a passphrase. The key is found by that
-address in `artifacts/keystores/`, the same way the RV finds its voucher key.
-
-```json
-{ "signer": { "passphrase": "…" } }
-```
-
-or, keeping it out of the file, `PROBE_SIGNER_PASSPHRASE` (mesh marks it
-`secret: true`, so `isann mesh config` handles it).
-
-That is deliberately the only knob. With a configurable path there are two
-things to get right and they can disagree; by address there is one question
-with one answer — either this node has the key or it does not:
+There is no key to configure and no passphrase. Two keys are used, both tied to
+this machine:
 
 ```
-[probe] no keystore for 0xc8ff97… in …/artifacts/keystores — the appointment is
-        bound to an address this node has no key for
+X-ISANN-Probe header   node identity key (derived from the hardware)   "this machine is a prober of this slot"
+ticket                 TPM key (never leaves the chip)                  "this machine checked that node"
 ```
 
-Whichever key you use, the appointment must be bound to it
-(`ivm account issue --kind prober --bind <that address>`). A purpose-made key
-is fine and means a leak costs the prober role and nothing else; the node's own
-wallet works too.
-
-Leaving the passphrase unset is allowed for now — firing probes is anonymous,
-so nothing is signed yet. The startup log will say the key is UNVERIFIED.
-
-`PROBE_KEYSTORES_DIR` overrides where to look, for installs that keep keys
-somewhere unusual.
+The RV already knows both — it recorded them when this node registered — so
+nothing extra travels with a ticket to say who signed it. A copied config file
+cannot mint tickets in this machine's name.
 
 ## Where things land
 

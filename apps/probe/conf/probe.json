@@ -24,8 +24,5 @@
   "question_fanout": 5,
   "db": "db/probe.db",
   "queue_low_water": 10,
-  "observation_days": 30,
-  "signer": {
-    "passphrase": ""
-  }
+  "observation_days": 30
 }

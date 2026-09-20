@@ -13,19 +13,6 @@
     "path": "config.json",
     "env": [
       {
-        "key": "PROBE_SIGNER_PASSPHRASE",
-        "required": false,
-        "secret": true,
-        "from": "cred:prober.passphrase",
-        "desc": "passphrase for the ticket-signing key; the key itself is found by the appointment's bound address in artifacts/keystores/. `isann cred issue -enroll` fills this in — it is the same passphrase that signed the appointment, and `from` is what tells it so without the CLI knowing this key's name"
-      },
-      {
-        "key": "PROBE_KEYSTORES_DIR",
-        "required": false,
-        "secret": false,
-        "desc": "override the keystore search directory (default: the install root's artifacts/keystores)"
-      },
-      {
         "key": "PROBE_GENERATORS",
         "required": false,
         "secret": false,
