@@ -31,7 +31,12 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Build output (build/*/out, out-mesh, out-server, ...)
+# Build output (build/out, build/*/out, out-mesh, out-server, ...)
+#
+# build/out/ is listed on its own: the pattern below is build/<platform>/out/
+# and never matched it, so four linux binaries (61MB) stayed tracked and turned
+# up as "changed" after every build.
+build/out/
 build/*/out/
 build/*/out-*/
 
