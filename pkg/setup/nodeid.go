@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 
@@ -29,8 +30,31 @@ type NodeIdentity struct {
 //  2. GPU UUID + Mainboard UUID (fallback if no TPM)
 //
 // The private key is re-derived each time from hardware — never stored on disk.
+//
+// 🔴 A MISSING INGREDIENT IS AN ERROR, NEVER AN EMPTY STRING.
+//
+// Both ingredients are read by shelling out to something the OS provides, and
+// both readers answer "" when that something is gone. Folding "" into the HKDF
+// still produces a perfectly good key — for a DIFFERENT address. On 2026-09-20
+// a Windows update removed wmic, fetchMainboardUUID started returning "", and
+// two dev nodes silently became other nodes:
+//
+//	derive("2859A1A8-CABB-…", ek) -> 0x0d60eb4d…   before the update
+//	derive("",                ek) -> 0x2917031d…   after
+//
+// Everything keyed to the old address stopped matching at once (the RV's TPM
+// key binding, its prober roster, the name on chain) and nothing said why, for
+// three days. An address is this node's identity: refusing to produce one is
+// loud and recoverable, inventing one is neither. See docs/issues.md WS-05.
+//
+// 🔴 KEEP THIS IDENTICAL TO glink pkg/setup — isannd re-signs the register
+// frames station sends, so the two must derive the same address.
 func DeriveNodeIdentity() (NodeIdentity, error) {
 	mainboardUUID := fetchMainboardUUID()
+	if mainboardUUID == "" {
+		return NodeIdentity{}, fmt.Errorf(
+			"cannot read the mainboard UUID, so this node's address cannot be derived%s", mainboardUUIDHint())
+	}
 
 	// Try fTPM first
 	tpmInfo, tpmErr := ReadTPMInfo()
@@ -53,6 +77,13 @@ func DeriveNodeIdentity() (NodeIdentity, error) {
 	// Fallback: GPU UUID
 	log.Printf("[nodeid] fTPM not available (%v), using GPU UUID + mainboard UUID", tpmErr)
 	gpuUUID := fetchGPUUUID()
+	if gpuUUID == "" {
+		// fetchGPUUUID says "no-gpu" for a machine without one, which is a real
+		// (if weak) ingredient every GPU-less node shares. Empty means the probe
+		// itself came back with nothing, and that is the silent-drift case again.
+		return NodeIdentity{}, fmt.Errorf(
+			"no TPM (%v) and the GPU probe returned nothing, so this node's address cannot be derived", tpmErr)
+	}
 	privKey, err := derivePrivateKey(mainboardUUID, gpuUUID)
 	if err != nil {
 		return NodeIdentity{}, err

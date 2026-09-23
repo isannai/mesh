@@ -143,17 +143,56 @@ func detectCPUsDynamic() []CPUSpec {
 	return []CPUSpec{{Name: name, TempC: tempC}}
 }
 
-// fetchMainboardUUID returns the system UUID via dmidecode.
+// fetchMainboardUUID returns the system UUID (SMBIOS), or "" when it cannot be
+// read. "" is a hard failure for the caller — see DeriveNodeIdentity.
+//
+// 🔴 SYSFS FIRST, dmidecode ONLY AS A FALLBACK. dmidecode is a separate package
+// that minimal images do not carry, and shelling out to a missing binary looked
+// exactly like "this machine has no uuid": the node then derived its address
+// from an EMPTY uuid and became a different node, silently. The Windows half of
+// this function lost its reader to an OS update and did precisely that — see
+// workspace docs/issues.md WS-05.
+//
+// 🔴 KEEP THIS IDENTICAL TO glink pkg/setup — station and probe must derive the
+// same address isannd does, or the RV's signature check fails.
+//
+// Both paths need root (the kernel keeps product_uuid at 0400 because it is a
+// unique machine identifier), so running unprivileged returns "" here. That is
+// the caller's problem to report, not a reason to invent an identity.
 func fetchMainboardUUID() string {
+	if b, err := os.ReadFile("/sys/class/dmi/id/product_uuid"); err == nil {
+		if uuid := validMainboardUUID(string(b)); uuid != "" {
+			return uuid
+		}
+	}
 	out, err := exec.Command("dmidecode", "-s", "system-uuid").Output()
 	if err != nil {
 		return ""
 	}
-	uuid := strings.TrimSpace(string(out))
-	if uuid == "" || uuid == "Not Settable" || strings.HasPrefix(uuid, "Not") {
+	return validMainboardUUID(string(out))
+}
+
+// validMainboardUUID trims a raw reading and rejects the placeholders firmware
+// hands out when it has nothing real. An all-zero or all-F uuid is shared by
+// every machine with that firmware, so accepting one would collapse their
+// identities into a single address.
+func validMainboardUUID(raw string) string {
+	uuid := strings.TrimSpace(raw)
+	if strings.HasPrefix(uuid, "Not") { // Not Settable / Not Present / Not Available
+		return ""
+	}
+	switch strings.ToUpper(uuid) {
+	case "", "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF", "00000000-0000-0000-0000-000000000000":
 		return ""
 	}
 	return uuid
+}
+
+// mainboardUUIDHint tells the operator what to check when the uuid cannot be
+// read. Named per platform because the causes have nothing in common.
+func mainboardUUIDHint() string {
+	return " — /sys/class/dmi/id/product_uuid must be readable (root only)," +
+		" or dmidecode must be installed and runnable"
 }
 
 // fetchGPUUUID collects all GPU UUIDs via nvidia-smi, sorts and joins them.

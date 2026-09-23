@@ -127,8 +127,48 @@ func fetchGPUUUID() string {
 	return strings.Join(uuids, ":")
 }
 
-// fetchMainboardUUID returns the system UUID via wmic csproduct.
+// fetchMainboardUUID returns the system UUID (SMBIOS), or "" when it cannot be
+// read. "" is a hard failure for the caller — see DeriveNodeIdentity.
+//
+// 🔴 CIM FIRST, wmic ONLY AS A FALLBACK. wmic is being removed from Windows
+// (deprecated since 21H1, absent on 24H2+ installs). When it went away this
+// function returned "" with no error and the node kept going, deriving its
+// address from an EMPTY uuid — a different address. Two dev nodes changed
+// identity on the same day that way, and everything keyed to the old address
+// (the RV's TPM key binding, its prober roster, the name on chain) silently
+// stopped matching. Nothing on the machines had changed but a Windows update.
+// See workspace docs/issues.md WS-05.
+//
+// 🔴 KEEP THIS IDENTICAL TO glink pkg/setup. station and probe derive the same
+// address isannd does, and isannd re-signs the register frames station sends.
+// If the two disagree the RV's signature check fails and the node stops
+// registering at all — worse than the drift this fixes.
+//
+// PowerShell costs a few hundred ms and this runs once per process (callers
+// cache the identity), so the order is correctness first, speed second.
 func fetchMainboardUUID() string {
+	if uuid := mainboardUUIDFromCIM(); uuid != "" {
+		return uuid
+	}
+	return mainboardUUIDFromWMIC()
+}
+
+// mainboardUUIDFromCIM asks WMI through PowerShell, which every supported
+// Windows still ships.
+func mainboardUUIDFromCIM() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive",
+		"-Command", "(Get-CimInstance -ClassName Win32_ComputerSystemProduct).UUID").Output()
+	if err != nil {
+		return ""
+	}
+	return validMainboardUUID(string(out))
+}
+
+// mainboardUUIDFromWMIC is the legacy path — kept for builds that still ship
+// wmic and for machines where PowerShell is locked down.
+func mainboardUUIDFromWMIC() string {
 	out, err := exec.Command("wmic", "csproduct", "get", "UUID", "/value").Output()
 	if err != nil {
 		return ""
@@ -136,13 +176,33 @@ func fetchMainboardUUID() string {
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "UUID=") {
-			uuid := strings.TrimSpace(strings.TrimPrefix(line, "UUID="))
-			if uuid != "" && uuid != "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF" {
+			if uuid := validMainboardUUID(strings.TrimPrefix(line, "UUID=")); uuid != "" {
 				return uuid
 			}
 		}
 	}
 	return ""
+}
+
+// validMainboardUUID trims a raw reading and rejects the placeholders firmware
+// hands out when it has nothing real. An all-zero or all-F uuid is shared by
+// every machine with that firmware, so accepting one would collapse their
+// identities into a single address.
+func validMainboardUUID(raw string) string {
+	uuid := strings.TrimSpace(raw)
+	switch strings.ToUpper(uuid) {
+	case "", "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF", "00000000-0000-0000-0000-000000000000",
+		"NOT SETTABLE", "NOT PRESENT", "NOT AVAILABLE":
+		return ""
+	}
+	return uuid
+}
+
+// mainboardUUIDHint tells the operator what to check when the uuid cannot be
+// read. Named per platform because the causes have nothing in common.
+func mainboardUUIDHint() string {
+	return " — `(Get-CimInstance Win32_ComputerSystemProduct).UUID` must answer;" +
+		" wmic is absent on Windows 24H2+ and is only a fallback here"
 }
 
 // detectRAMFreeGB returns available physical memory in GB using GlobalMemoryStatusEx.
