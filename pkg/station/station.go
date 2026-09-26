@@ -66,9 +66,9 @@ type Provider struct {
 
 	// Phase 7 of queue migration: Provider-owned job queue + HTTP routes.
 	// queueMgr / storage may be nil in legacy mode (engine-runner still owns
-	// the queue); jobsHandler is built only when queueMgr is non-nil and is
-	// dispatched to by stream.go for /provider/v1/jobs*, /provider/outputs/*,
-	// and /provider/v1/queue/stats paths.
+	// the queue); jobsHandler is built only when queueMgr is non-nil. It serves
+	// the HTTP mux (Register) and the /svc/{service}/v1/jobs* door
+	// (HandleServiceProxy).
 	queueMgr    *queue.Manager
 	storage     *queue.Storage
 	jobsHandler *JobsHandler

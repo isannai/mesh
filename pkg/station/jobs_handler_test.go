@@ -26,6 +26,18 @@ func stubFactory(engine *httptest.Server) queue.Factory {
 	}
 }
 
+// serveJobs mounts h the way the station does: the job routes plus the /svc/
+// door, which is where a job is submitted.
+func serveJobs(t *testing.T, h *JobsHandler) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.Register(mux)
+	mux.HandleFunc("/svc/", (&Provider{jobsHandler: h}).HandleServiceProxy)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func newTestHandler(t *testing.T, engine *httptest.Server) (*JobsHandler, *httptest.Server) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -33,11 +45,7 @@ func newTestHandler(t *testing.T, engine *httptest.Server) (*JobsHandler, *httpt
 	mgr := queue.NewManager(ctx, stubFactory(engine))
 	services := []setup.ServiceEntry{{Name: "sd-api", Addr: "ignored"}}
 	h := NewJobsHandler(mgr, nil, services, nil, nil)
-	mux := http.NewServeMux()
-	h.Register(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return h, srv
+	return h, serveJobs(t, h)
 }
 
 // streamStubFactory points the queue at an SSE engine and wires StreamPath so
@@ -57,11 +65,7 @@ func newStreamTestHandler(t *testing.T, engine *httptest.Server) *httptest.Serve
 	t.Cleanup(cancel)
 	mgr := queue.NewManager(ctx, streamStubFactory(engine))
 	h := NewJobsHandler(mgr, nil, []setup.ServiceEntry{{Name: "sd-api", Addr: "ignored"}}, nil, nil)
-	mux := http.NewServeMux()
-	h.Register(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+	return serveJobs(t, h)
 }
 
 // TestJobsHandlerStreamChunks drives a stream-mode submit end-to-end: the
@@ -92,7 +96,7 @@ func TestJobsHandlerStreamChunks(t *testing.T) {
 	srv := newStreamTestHandler(t, engine)
 
 	body, _ := json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{"prompt":"x"}`), Stream: true, ChunkMode: "sentence"})
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -256,7 +260,7 @@ func TestJobsHandlerSubmitAccepted(t *testing.T) {
 	_, srv := newTestHandler(t, engine)
 
 	body, _ := json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{"prompt":"x"}`)})
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -281,7 +285,7 @@ func TestJobsHandlerServiceNotFound(t *testing.T) {
 	_, srv := newTestHandler(t, engine)
 
 	body, _ := json.Marshal(submitRequest{Service: "nope", Params: json.RawMessage(`{}`)})
-	resp, _ := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(string(body)))
+	resp, _ := http.Post(srv.URL+"/svc/nope/v1/jobs", "application/json", strings.NewReader(string(body)))
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -300,7 +304,7 @@ func TestJobsHandlerWaitMode(t *testing.T) {
 		Params:  json.RawMessage(`{}`),
 		Wait:    true,
 	})
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -329,7 +333,7 @@ func TestJobsHandlerWaitModeFailed(t *testing.T) {
 		Params:  json.RawMessage(`{}`),
 		Wait:    true,
 	})
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -357,7 +361,7 @@ func TestJobsHandlerByID(t *testing.T) {
 
 	// Submit
 	body, _ := json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{}`)})
-	resp, _ := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(string(body)))
+	resp, _ := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
 	var sr submitResponse
 	json.NewDecoder(resp.Body).Decode(&sr)
 	resp.Body.Close()

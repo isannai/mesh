@@ -6,27 +6,20 @@ package station
 // "받는 door 가 IANN 서명을 직접 recover" 로 옮긴다 (docs/TODO/isann-cli-phase3.md).
 // 0-c 까지 적용된 최종 상태 — X-Caller-Address 는 어디서도 신뢰하지 않는다.
 //
-// 이 파일이 덮는 4(+1)가지:
-//   - recoverCaller       : 서명에서만 신원 복구 (헤더 완전 무시 = 사칭 불가)
-//   - providerRole        : owner/admin/user/issuer 4-role 분류
-//   - verifyInferenceAuth : 보호모드 추론 게이트 (서명 필수, 4-role)
-//   - isInferencePath     : 어떤 경로가 4-role 게이트를 타는가
-//   - authorizeJob        : 실제 핸들러를 관통하는 per-job 소유권 (end-to-end)
+// 이 파일이 덮는 두 가지:
+//   - recoverCaller : 서명에서만 신원 복구 (헤더 완전 무시 = 사칭 불가)
+//   - authorizeJob  : 실제 핸들러를 관통하는 per-job 소유권 (end-to-end)
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/isannai/mesh/pkg/auth"
-	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 // newWallet 은 테스트용 진짜 지갑을 하나 만든다 — secp256k1 키쌍을 생성해
@@ -112,7 +105,7 @@ func TestRecoverCaller(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/v1/jobs", nil)
+			r := httptest.NewRequest(http.MethodPost, "/svc/sd-api/v1/jobs", nil)
 			for k, v := range tc.headers {
 				r.Header.Set(k, v)
 			}
@@ -124,160 +117,16 @@ func TestRecoverCaller(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// providerRole — 4-role 분류 (walletIsOperator-class 핫스팟)
-// ----------------------------------------------------------------------------
-
-// TestProviderRole 은 auth.json 에 owner/admin/user/issuer 가 등록된 Provider 를
-// 만들고, providerRole 이 각 주소를 올바른 role 로 분류하는지 + 미등록은 ""
-// + 대소문자 무시까지 확인한다. CLAUDE.md 가 경고한 4-role 허용 버그 영역이라
-// 의도적으로 못 박는다.
-func TestProviderRole(t *testing.T) {
-	_, owner := newWallet(t)
-	_, admin := newWallet(t)
-	_, user := newWallet(t)
-	_, issuer := newWallet(t)
-	_, stranger := newWallet(t)
-
-	p := &Provider{Base: &tunnel.Base{Auth: tunnel.AuthConfig{
-		Mode:   "protected",
-		Owner:  owner,
-		Admins: []string{admin},
-		Users:  []string{user},
-		Issuer: issuer,
-	}}}
-
-	cases := []struct {
-		addr string
-		want string
-	}{
-		{owner, "owner"},
-		{admin, "admin"},
-		{user, "user"},
-		{issuer, "issuer"},
-		{stranger, ""},                    // 어느 목록에도 없으면 role 없음
-		{strings.ToLower(owner), "owner"}, // 주소 비교는 대소문자 무시
-	}
-	for _, c := range cases {
-		if got := p.providerRole(c.addr); got != c.want {
-			t.Errorf("providerRole(%s) = %q, want %q", c.addr, got, c.want)
-		}
-	}
-}
-
-// ----------------------------------------------------------------------------
-// verifyInferenceAuth — 보호모드 추론 게이트 (서명 필수)
-// ----------------------------------------------------------------------------
-
-// TestVerifyInferenceAuth 는 4-role 추론 게이트를 검증한다. bufStream(메모리
-// quic.Stream 어댑터)을 써서 네트워크 없이 게이트를 직접 호출한다.
-// 0-c: 통과하려면 유효한 4-role *서명* 이 필요하다 — X-Caller-Address 헤더로는
-// 통과할 수 없다.
-func TestVerifyInferenceAuth(t *testing.T) {
-	userPK, user := newWallet(t)
-	strangerPK, _ := newWallet(t)
-
-	// user 한 명만 등록된 보호모드 노드.
-	p := &Provider{Base: &tunnel.Base{Auth: tunnel.AuthConfig{Mode: "protected", Users: []string{user}}}}
-
-	// 서명 메시지의 만료 필드({...}:{...}:{...}:{nonce}:{expiresAt}:{nodes})로
-	// 만료 검사까지 탄다. 미래/과거 unix 타임스탬프를 박는다.
-	future := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
-	past := strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)
-
-	tests := []struct {
-		name    string
-		headers map[string]string
-		want    bool
-	}{
-		// 등록된 user 의 유효 서명 → 통과 (4-role 이라 owner/admin 아니어도 OK).
-		{
-			"valid user signature passes (4-role)",
-			signedHeaders(t, userPK, "user:provider:sd:n1:"+future+":"),
-			true,
-		},
-		// auth.json 어디에도 없는 지갑 서명 → 403.
-		{
-			"signed by unknown wallet rejected",
-			signedHeaders(t, strangerPK, "user:provider:sd:n1:"+future+":"),
-			false,
-		},
-		// 아무 인증 헤더도 없으면 → 401.
-		{
-			"no auth headers rejected",
-			nil,
-			false,
-		},
-		// 만료된 서명 → 401.
-		{
-			"expired signature rejected",
-			signedHeaders(t, userPK, "user:provider:sd:n1:"+past+":"),
-			false,
-		},
-		// 0-c 핵심: X-Caller-Address 만 있고 서명이 없으면 더 이상 통과 못 한다
-		// (예전 broker-vouched 분기 제거). 헤더로 게이트를 못 연다.
-		{
-			"X-Caller-Address alone no longer passes the gate",
-			map[string]string{"X-Caller-Address": "0xabc"},
-			false,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/provider/v1/jobs", nil)
-			for k, v := range tc.headers {
-				r.Header.Set(k, v)
-			}
-			bs := &bufStream{Buffer: new(bytes.Buffer)}
-			if got := p.verifyInferenceAuth(bs, r); got != tc.want {
-				t.Errorf("verifyInferenceAuth = %v, want %v (resp: %s)", got, tc.want, bs.String())
-			}
-		})
-	}
-}
-
-// TestIsInferencePath 는 어떤 orchestrator 경로가 4-role 추론 게이트
-// (verifyInferenceAuth)를 타고, 어떤 경로가 owner/admin 운영 게이트로 남는지를
-// 경계 검증한다. 운영 경로가 실수로 추론 게이트로 새지 않는지 확인.
-func TestIsInferencePath(t *testing.T) {
-	// 추론(4-role 게이트) — 잡 제출/조회/결과, 큐 통계, 산출물 다운로드.
-	yes := []struct{ m, p string }{
-		{http.MethodPost, "/provider/v1/jobs"},
-		{http.MethodGet, "/provider/v1/jobs/abc123"},
-		{http.MethodGet, "/provider/v1/jobs/abc123/result"},
-		{http.MethodGet, "/provider/outputs/sd_abc.png"},
-		{http.MethodGet, "/provider/v1/queue/stats"},
-	}
-	for _, c := range yes {
-		if !isInferencePath(c.p, c.m) {
-			t.Errorf("isInferencePath(%s %s) = false, want true", c.m, c.p)
-		}
-	}
-	// 추론 아님(owner/admin 운영 게이트 유지) — 설정/프로필/서비스 기동 +
-	// 잡 제출도 결과조회도 아닌 맨 GET.
-	no := []struct{ m, p string }{
-		{http.MethodPost, "/provider/config"},
-		{http.MethodGet, "/provider/profiles"},
-		{http.MethodPost, "/service/sd/start"},
-		{http.MethodGet, "/provider/v1/jobs"}, // 맨 GET 은 제출도 id조회도 아님
-	}
-	for _, c := range no {
-		if isInferencePath(c.p, c.m) {
-			t.Errorf("isInferencePath(%s %s) = true, want false", c.m, c.p)
-		}
-	}
-}
-
-// ----------------------------------------------------------------------------
 // authorizeJob — 실제 핸들러를 관통하는 소유권 (end-to-end)
 // ----------------------------------------------------------------------------
 
-// submitFor 는 주어진 헤더로 job 을 제출하고 job id 를 돌려준다. 실제
-// JobsHandler 의 POST /v1/jobs 를 타므로 recoverCaller → SubmitterAddress
+// submitFor 는 주어진 헤더로 job 을 제출하고 job id 를 돌려준다. station 과
+// 같은 /svc/sd-api/v1/jobs 제출 경로를 타므로 recoverCaller → SubmitterAddress
 // 경로가 그대로 돈다.
 func submitFor(t *testing.T, srvURL string, headers map[string]string) string {
 	t.Helper()
 	body, _ := json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{"prompt":"x"}`)})
-	req, _ := http.NewRequest(http.MethodPost, srvURL+"/v1/jobs", strings.NewReader(string(body)))
+	req, _ := http.NewRequest(http.MethodPost, srvURL+"/svc/sd-api/v1/jobs", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)

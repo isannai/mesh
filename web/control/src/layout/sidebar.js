@@ -83,8 +83,6 @@ export default function Sidebar() {
         "Provider Versions", "Provider Processes",
         "Log Files", "Log Tail",
         "Profiles", "Sync Status",
-        "Provider Queue Stats", "Submit Job", "Provider Job by ID", "Provider Job Result",
-        "Provider Output File",
         "Get Provider Config", "Update Provider Config",
         "Set Active Profile", "Create Profile", "Delete Profile",
         "Set Emblem", "Delete Emblem",

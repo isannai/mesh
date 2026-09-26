@@ -61,11 +61,7 @@ func newMappingHandler(t *testing.T, engine *httptest.Server, rs *manifest.RunSp
 		return nil
 	}
 	h := NewJobsHandler(mgr, nil, services, apiFor, nil)
-	mux := http.NewServeMux()
-	h.Register(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+	return serveJobs(t, h)
 }
 
 // mappingRunSpec — prompt(필수) + steps(default 20) + negative(옵션) 스칼라 셋.
@@ -90,7 +86,7 @@ func TestSubmitRunMapping_EndToEnd(t *testing.T) {
 	srv := newMappingHandler(t, engine, mappingRunSpec())
 
 	reqBody := `{"service":"sd-api","run":{"prompt":"a fox","steps":30},"wait":true}`
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -151,7 +147,7 @@ func TestSubmitRunMapping_ExtraArgs(t *testing.T) {
 	srv := newMappingHandler(t, engine, rs)
 
 	reqBody := `{"service":"sd-api","run":{"prompt":"a fox","steps":30},"wait":true}`
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -194,7 +190,7 @@ func TestSubmitRunMapping_NoSchema(t *testing.T) {
 	srv := newMappingHandler(t, engine, nil) // resolver 가 "sd-api" 에도 nil 반환
 
 	reqBody := `{"service":"sd-api","run":{"prompt":"x"},"wait":true}`
-	resp, _ := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, _ := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (no api.run schema)", resp.StatusCode)
@@ -209,7 +205,7 @@ func TestSubmitRunMapping_RequiredMissing(t *testing.T) {
 	srv := newMappingHandler(t, engine, mappingRunSpec())
 
 	reqBody := `{"service":"sd-api","run":{"steps":10},"wait":true}`
-	resp, _ := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, _ := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (missing required prompt)", resp.StatusCode)

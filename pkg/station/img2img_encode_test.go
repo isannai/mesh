@@ -66,11 +66,7 @@ func newAPIHandler(t *testing.T, engine *httptest.Server, api *manifest.APISpec)
 		return nil
 	}
 	h := NewJobsHandler(mgr, nil, services, apiFor, nil)
-	mux := http.NewServeMux()
-	h.Register(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+	return serveJobs(t, h)
 }
 
 // sdEditAPI mirrors sd.json's shape: a default txt2img run plus an img2img run
@@ -112,7 +108,7 @@ func TestImg2ImgMultipart_EndToEnd(t *testing.T) {
 	srv := newAPIHandler(t, engine, sdEditAPI())
 
 	reqBody := `{"service":"sd-api","path":"/v1/images/edits","run":{"prompt":"watercolor","image":"` + srcB64 + `","strength":0.6},"wait":true}`
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -174,7 +170,7 @@ func TestPathAllowlist_Rejects(t *testing.T) {
 	srv := newAPIHandler(t, engine, sdEditAPI())
 
 	reqBody := `{"service":"sd-api","path":"/v1/../secret","run":{"prompt":"x"},"wait":true}`
-	resp, err := http.Post(srv.URL+"/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}

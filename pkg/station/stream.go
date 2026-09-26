@@ -69,24 +69,12 @@ func (p *Provider) dispatchOrchestratorRequest(stream quic.Stream, req *http.Req
 	// - Public paths → pass through
 	// - Bearer-token paths → handler validates its own pre-shared token
 	// - Management paths → always require owner/admin IANN wallet auth
-	// - Other paths + protected mode → require auth (owner/admin/user)
+	// - Other paths + protected mode → require owner/admin IANN wallet auth
 	// - Other paths + open mode → pass through
-	if !isPublicOrchestratorPath(path, method) && !isBearerAuthPath(path, method) {
-		if isManagementPath(path, method) {
-			if !p.verifyOrchestratorAuth(stream, req) {
-				return
-			}
-		} else if !p.Auth.IsPublic() {
-			// Inference paths (jobs/queue/outputs) take the 4-role gate so
-			// user/issuer wallets can run inference in protected mode (M0);
-			// everything else stays owner/admin-only (operation).
-			if isInferencePath(path, method) {
-				if !p.verifyInferenceAuth(stream, req) {
-					return
-				}
-			} else if !p.verifyOrchestratorAuth(stream, req) {
-				return
-			}
+	if !isPublicOrchestratorPath(path, method) && !isBearerAuthPath(path, method) &&
+		(isManagementPath(path, method) || !p.Auth.IsPublic()) {
+		if !p.verifyOrchestratorAuth(stream, req) {
+			return
 		}
 	}
 
@@ -135,20 +123,6 @@ func (p *Provider) dispatchOrchestratorRequest(stream quic.Stream, req *http.Req
 		p.handleUpsertProfile(stream, req)
 	case path == "/provider/profile" && method == "DELETE":
 		p.handleDeleteProfile(stream, req)
-
-	// === Queue (Phase 7 wiring — broker job submission) ===
-	// /provider/v1/jobs is POST-only (Submit Job). There is no list endpoint —
-	// callers must track their own job IDs and read single jobs via
-	// /provider/v1/jobs/{id}. GET on the bare path falls through to the default
-	// 404 below (was 405 — corrected so the response stays JSON-shaped).
-	case path == "/provider/v1/jobs" && method == "POST":
-		p.serveJobsHandler(stream, req, "/v1/jobs")
-	case strings.HasPrefix(path, "/provider/v1/jobs/") && method == "GET":
-		p.serveJobsHandler(stream, req, strings.TrimPrefix(path, "/provider"))
-	case strings.HasPrefix(path, "/provider/outputs/") && method == "GET":
-		p.serveJobsHandler(stream, req, strings.TrimPrefix(path, "/provider"))
-	case path == "/provider/v1/queue/stats" && method == "GET":
-		p.serveJobsHandler(stream, req, "/v1/queue/stats")
 
 	// === Sync ===
 	case path == "/provider/sync/create" && method == "POST":
@@ -235,69 +209,6 @@ func (p *Provider) verifyOrchestratorAuth(stream quic.Stream, req *http.Request)
 		}
 	}
 
-	writeHTTPResponse(stream, 403, "application/json", []byte(`{"error":"not authorized"}`))
-	return false
-}
-
-// providerRole classifies a recovered EOA against this provider's auth.json,
-// mirroring broker's classifyAddress. Returns "owner"/"admin"/"user"/"issuer",
-// or "" when the address holds no role. Drives the 4-role inference gate.
-func (p *Provider) providerRole(address string) string {
-	if p.Auth.Owner != "" && strings.EqualFold(address, p.Auth.Owner) {
-		return "owner"
-	}
-	for _, a := range p.Auth.Admins {
-		if strings.EqualFold(address, a) {
-			return "admin"
-		}
-	}
-	for _, u := range p.Auth.Users {
-		if strings.EqualFold(address, u) {
-			return "user"
-		}
-	}
-	if p.Auth.Issuer != "" && strings.EqualFold(address, p.Auth.Issuer) {
-		return "issuer"
-	}
-	return ""
-}
-
-// verifyInferenceAuth gates inference requests (job submit/status/result,
-// queue stats, outputs) in protected mode. Unlike verifyOrchestratorAuth
-// (owner/admin only — operation), inference allows all four roles
-// (owner/admin/user/issuer): running inference is not an operator action.
-//
-// The caller proves identity with their own IANN signature (Authorization:
-// ISANN <sig> + X-ISANN-Message), recovered and role-checked here against
-// this provider's auth.json. No forwarded header is trusted — X-Caller-Address
-// is never consulted (M0 0-c) — so the gate can't be passed by a spoofed
-// header.
-//
-// Returns false (and writes the error response) when no valid 4-role
-// signature is present.
-func (p *Provider) verifyInferenceAuth(stream quic.Stream, req *http.Request) bool {
-	sig := strings.TrimPrefix(req.Header.Get("Authorization"), "ISANN ")
-	message := req.Header.Get("X-ISANN-Message")
-	if sig == "" || message == "" {
-		writeHTTPResponse(stream, 401, "application/json", []byte(`{"error":"missing auth headers"}`))
-		return false
-	}
-	// Expiry from message: {role}:{target}:{service}:{nonce}:{expiresAt}:{nodes}
-	parts := strings.SplitN(message, ":", 6)
-	if len(parts) >= 5 {
-		if exp, err := strconv.ParseInt(parts[4], 10, 64); err == nil && time.Now().Unix() > exp {
-			writeHTTPResponse(stream, 401, "application/json", []byte(`{"error":"signature expired"}`))
-			return false
-		}
-	}
-	address, err := auth.RecoverAddress(message, sig)
-	if err != nil {
-		writeHTTPResponse(stream, 401, "application/json", []byte(`{"error":"invalid signature"}`))
-		return false
-	}
-	if p.providerRole(address) != "" {
-		return true
-	}
 	writeHTTPResponse(stream, 403, "application/json", []byte(`{"error":"not authorized"}`))
 	return false
 }
@@ -459,24 +370,6 @@ func isBearerAuthPath(path, method string) bool {
 	}
 	switch path {
 	case "/provider/sync/snapshot", "/provider/sync/file":
-		return true
-	}
-	return false
-}
-
-// isInferencePath reports whether the orchestrator path is an inference
-// request (job submit/status/result, queue stats, outputs). Inference paths
-// take the 4-role gate (verifyInferenceAuth) instead of the owner/admin
-// operator gate, so user/issuer wallets can run inference in protected mode.
-func isInferencePath(path, method string) bool {
-	switch {
-	case method == http.MethodPost && path == "/provider/v1/jobs":
-		return true
-	case method == http.MethodGet && strings.HasPrefix(path, "/provider/v1/jobs/"):
-		return true
-	case method == http.MethodGet && strings.HasPrefix(path, "/provider/outputs/"):
-		return true
-	case method == http.MethodGet && path == "/provider/v1/queue/stats":
 		return true
 	}
 	return false

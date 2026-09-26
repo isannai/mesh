@@ -84,19 +84,27 @@ func (h *JobsHandler) apiSpec(service string) *manifest.APISpec {
 // Register attaches all queue-related routes to mux. Idempotent: callers
 // must use a fresh ServeMux. Routes:
 //
-//	POST /v1/jobs                — submit job (returns 202 + job_id, or 429)
 //	GET  /v1/jobs/{id}           — status JSON
 //	GET  /v1/jobs/{id}/result    — body or file stream
 //	GET  /outputs/{filename}     — disk file stream (Storage-backed)
 //	GET  /v1/queue/stats?service=NAME — single-service queue stats
+//
+// A job is submitted only at /svc/{service}/v1/jobs (HandleServiceProxy), the
+// path isannd's provider door checks and bills. POST /v1/jobs answers 404 with
+// that path instead of the mux's redirect to /v1/jobs/.
 func (h *JobsHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/jobs", h.handleSubmit)       // POST
+	mux.HandleFunc("/v1/jobs", submitElsewhere)
 	mux.HandleFunc("/v1/jobs/", h.handleByID)        // GET (id, id/result)
 	mux.HandleFunc("/outputs/", h.handleOutputs)     // GET
 	mux.HandleFunc("/v1/queue/stats", h.handleStats) // GET
 }
 
-// submitRequest is the POST /v1/jobs body shape.
+// submitElsewhere answers the bare /v1/jobs: jobs are submitted per service.
+func submitElsewhere(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusNotFound, errorResponse{Error: "submit jobs at /svc/{service}/v1/jobs"})
+}
+
+// submitRequest is the body of a job submit (/svc/{service}/v1/jobs).
 type submitRequest struct {
 	Service string          `json:"service"`        // required
 	Path    string          `json:"path,omitempty"` // optional override; defaults to "/v1/inference"
@@ -162,7 +170,8 @@ func (h *JobsHandler) handleSubmitForService(w http.ResponseWriter, r *http.Requ
 	h.handleSubmit(w, r)
 }
 
-// handleSubmit handles POST /v1/jobs.
+// handleSubmit enqueues a job. Reached through handleSubmitForService, which
+// takes the service from the /svc/{service}/v1/jobs URL.
 func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
