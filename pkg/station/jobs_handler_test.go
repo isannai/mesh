@@ -350,6 +350,69 @@ func TestJobsHandlerWaitModeFailed(t *testing.T) {
 	}
 }
 
+// An engine that refuses the request fails the job (the payment gate bills
+// only done jobs), and the job's result is the engine's own answer: its
+// status, content type and body. Status says failed with the engine's reason.
+func TestJobsHandlerEngineRefusal(t *testing.T) {
+	const refusal = `{"error":{"code":400,"message":"size 300x300 is not supported"}}`
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(refusal))
+	}))
+	defer engine.Close()
+	h, srv := newTestHandler(t, engine)
+
+	body, _ := json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{"size":"300x300"}`)})
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	var sr submitResponse
+	json.NewDecoder(resp.Body).Decode(&sr)
+	resp.Body.Close()
+	wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := h.mgr.Get("sd-api").Wait(wctx, sr.JobID); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	st, err := http.Get(srv.URL + "/v1/jobs/" + sr.JobID)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	var job struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	json.NewDecoder(st.Body).Decode(&job)
+	st.Body.Close()
+	if job.Status != "failed" || job.Error != "engine answered 400: size 300x300 is not supported" {
+		t.Errorf("job %+v, want failed with the engine's reason", job)
+	}
+
+	res, err := http.Get(srv.URL + "/v1/jobs/" + sr.JobID + "/result")
+	if err != nil {
+		t.Fatalf("result: %v", err)
+	}
+	got, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest || res.Header.Get("Content-Type") != "application/json" || string(got) != refusal {
+		t.Errorf("result %d %q %s, want the engine's 400 as it gave it", res.StatusCode, res.Header.Get("Content-Type"), got)
+	}
+
+	body, _ = json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{}`), Wait: true})
+	resp, err = http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("post wait: %v", err)
+	}
+	got, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || string(got) != refusal {
+		t.Errorf("wait:true %d %s, want the engine's 400", resp.StatusCode, got)
+	}
+}
+
 func TestJobsHandlerByID(t *testing.T) {
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(20 * time.Millisecond)

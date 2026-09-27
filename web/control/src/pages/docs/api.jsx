@@ -947,7 +947,7 @@ es.onmessage = e => {
     <h3 className="api-section-title section-wide">Result Download</h3>
 
     <ApiCard method="get" path="/node/{nodeId}/svc/sd-api/v1/jobs/{jobId}/result" title="Job Result" ownership
-      desc={<>Fetch the final result body of a finished job. Response is the raw image bytes with <code>Content-Type: image/png</code> (or the underlying engine's content type). Returns <code>202</code> when not yet done, <code>403</code> when ownership check fails, <code>500</code> on failed, <code>404</code> when not found. Pass <code>?consume=true</code> to evict the job from the queue (and delete the on-disk file) immediately after a successful fetch.</>}
+      desc={<>Fetch the final result body of a finished job. Response is the engine's OpenAI images answer as it gave it (<code>Content-Type: application/json</code>): <code>{"{"}"created":…, "data":[{"{"}"b64_json":"iVBORw0…"{"}"}, …]{"}"}</code>, one entry per picture. Decode each <code>b64_json</code> to get the PNG. Returns <code>202</code> when not yet done, <code>403</code> when ownership check fails, <code>404</code> when not found. A failed job answers <code>500</code>; one the engine refused answers with the engine's own status and body. Pass <code>?consume=true</code> to evict the job from the queue (and delete the on-disk file) immediately after a successful fetch.</>}
       pathParams={[
         { name: "nodeId", type: "string", desc: "Target node ID" },
         { name: "jobId", type: "string", desc: "Job ID from submit / poll response" },
@@ -985,7 +985,7 @@ es.onmessage = e => {
     </ApiCard>
 
     <ApiCard method="get" path="/node/{nodeId}/svc/sd-api/outputs/{filename}" title="Result Download"
-      desc={<>Download the generated image. Use the <code>url</code> field from the done response. Returns <code>403</code> when the file belongs to another wallet.</>}
+      desc={<>Download the result file: the same OpenAI images JSON as Job Result, every picture in it. Use the <code>url</code> field from the done response. Returns <code>403</code> when the file belongs to another wallet.</>}
       pathParams={[
         { name: "nodeId", type: "string", desc: "Target node ID" },
         { name: "filename", type: "string", desc: "Filename from done response url" },
@@ -995,21 +995,22 @@ es.onmessage = e => {
       ]}
       response={`// Full URL
 const imageUrl = \`/node/\${nodeId}/svc/sd-api\${job.url}\`;
-// → /node/0x7622.../svc/sd-api/outputs/17103_a1b2c3d4_16454.png
+// → /node/0x7622.../svc/sd-api/outputs/sd-api_a1b2c3d4e5f6.json
 
-// Response: PNG image binary (image/png)`}
-      example={`# Save with curl
-curl -o result.png http://broker:7860/node/{nodeId}/svc/sd-api/outputs/{filename}
+// Response: {"created":1710312000, "data":[{"b64_json":"iVBORw0…"}, …]}`}
+      example={`# Save with curl (the JSON; each b64_json is one PNG)
+curl -o result.json http://broker:7860/node/{nodeId}/svc/sd-api/outputs/{filename}
 
 # Python
-import requests
+import base64, requests
 resp = requests.get("http://broker:7860/node/{nodeId}/svc/sd-api/outputs/{filename}")
-with open("result.png", "wb") as f:
-    f.write(resp.content)`}
+for i, pic in enumerate(resp.json()["data"], 1):
+    with open(f"result-{i}.png", "wb") as f:
+        f.write(base64.b64decode(pic["b64_json"]))`}
     >
       <OwnershipNote kind="read" />
       <TryIt>
-        <div className="api-try-row"><label>filename <span className="req">*</span></label><input id="try-dl-filename" type="text" placeholder="1710312000_a1b2c3d4_1645409091.png" /></div>
+        <div className="api-try-row"><label>filename <span className="req">*</span></label><input id="try-dl-filename" type="text" placeholder="sd-api_a1b2c3d4e5f6.json" /></div>
         <div className="api-try-row"><label>consume</label><input id="try-dl-consume" type="checkbox" /></div>
         <div className="api-try-actions">
           <button className="api-try-send" onClick={e => {
@@ -1019,7 +1020,7 @@ with open("result.png", "wb") as f:
             const qs = consume ? "?consume=true" : "";
             const url = `/node/${encodeURIComponent(selectedNode)}/svc/sd-api/outputs/${filename}${qs}`;
             window.open(url, "_blank");
-          }}>Open Image</button>
+          }}>Open</button>
           <button className="api-try-send api-try-send-success" onClick={e => {
             const filename = document.getElementById("try-dl-filename")?.value;
             if (!filename) return;

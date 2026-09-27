@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -433,6 +434,12 @@ func (q *Queue) runJob(ctx context.Context, job *Job, process ProcessFunc) {
 	if err != nil {
 		job.Status = StatusFailed
 		job.Error = err.Error()
+		// An engine that refused the request keeps its answer, so the result
+		// door can give it back with the engine's own status.
+		var ee *EngineError
+		if errors.As(err, &ee) {
+			job.ResponseCode, job.ResponseType, job.ResponseBody = ee.Code, ee.ContentType, ee.Body
+		}
 		q.totalFailed++
 	} else {
 		job.Status = StatusDone

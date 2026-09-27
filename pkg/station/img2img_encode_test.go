@@ -4,7 +4,7 @@ package station
 // submit {path:/v1/images/edits, run:{prompt,image,strength}} is mapped through
 // the run template and then transcoded to multipart/form-data at the engine
 // edge, with the base64 image param decoded into a file part. The engine's
-// OpenAI-images response is decoded back to image/png.
+// OpenAI-images response comes back as it is (every picture in it).
 // See docs/confirm/20260704/sd-img2img-queue-plan.md.
 
 import (
@@ -26,7 +26,7 @@ import (
 )
 
 // mpEngine records the Content-Type + raw body it receives and returns an
-// OpenAI-images response so a wait=true submit resolves to a decoded image.
+// OpenAI-images response, which a wait=true submit answers with.
 type mpEngine struct {
 	mu   sync.Mutex
 	ct   string
@@ -118,12 +118,12 @@ func TestImg2ImgMultipart_EndToEnd(t *testing.T) {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
 	}
 
-	// wait=true → the decoded image/png comes back inline.
-	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
-		t.Errorf("result Content-Type = %q, want image/png", ct)
+	// wait=true → the engine's OpenAI-images answer comes back inline.
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("result Content-Type = %q, want application/json", ct)
 	}
-	if gotOut, _ := io.ReadAll(resp.Body); string(gotOut) != "RESULTPNG" {
-		t.Errorf("result body = %q, want decoded RESULTPNG", gotOut)
+	if gotOut, _ := io.ReadAll(resp.Body); string(gotOut) != `{"data":[{"b64_json":"`+outB64+`"}]}` {
+		t.Errorf("result body = %q, want the engine's answer", gotOut)
 	}
 
 	// The engine received multipart with the image decoded into a file part.

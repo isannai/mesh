@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,18 +29,19 @@ type DispatchOptions struct {
 	// svc.Addr verbatim. Override for tests pointing at httptest servers.
 	AddrFunc func(setup.ServiceEntry) string
 
-	// DecodeOpenAIImage controls whether successful JSON responses with the
-	// shape {data:[{b64_json}]} are decoded into raw PNG bytes. Defaults to
-	// true (sd-api compatibility — sd-server speaks OpenAI Images API and
-	// the broker expects raw image bytes).
-	DecodeOpenAIImage *bool
+	// Pictures marks a service that answers with pictures (manifest result
+	// modality image). A success that carries no picture is a failed job: the
+	// payment gate prices a picture job by what it asked for, so an empty
+	// answer must not come back as done.
+	Pictures bool
 
 	// StreamPath is the manifest's api.run.result.stream_path — the JSONPath
 	// into an SSE delta chunk (e.g. "choices[0].delta.content"). When set and
 	// a job has Stream=true, the processor reads the engine's SSE response,
 	// extracts tokens via this path, and accumulates sentence chunks on the
 	// job. Empty disables streaming (falls back to buffering). See M3 in
-	// docs/TODO/infer-streaming.md.
+	// docs/TODO/infer-streaming.md. A /v1/completions job reads its tokens from
+	// completionText instead: that stream carries text, not chat deltas.
 	StreamPath string
 
 	// Timeout bounds a single engine call so a stalled engine cannot wedge the
@@ -56,15 +56,16 @@ type DispatchOptions struct {
 // engine-runner (sd.cpp, llama.cpp, …). The processor:
 //
 //  1. POSTs job.RequestBody to http://{svc.Addr}{job.Path} preserving headers
-//  2. Reads the full response body
-//  3. If the response is a JSON success body shaped like an OpenAI Images
-//     response, decodes the first b64_json into raw bytes (sd-api compat)
-//  4. If opts.Storage is non-nil, persists to disk and stamps job.URL.
+//  2. Reads the full response body. An OpenAI images answer stays as the
+//     engine gave it ({data:[{b64_json}, …]}), every picture in it.
+//  3. If opts.Storage is non-nil, persists to disk and stamps job.URL.
 //     On successful save returns body=nil so runJob frees the heap.
-//  5. Returns (code, contentType, body, err) for the queue's runJob to record.
+//  4. Returns (code, contentType, body, err) for the queue's runJob to record.
 //
 // Network errors and ctx cancellation propagate via the err return — runJob
-// flips Status=Failed and surfaces the message.
+// flips Status=Failed and surfaces the message. So does an engine that
+// answers 4xx/5xx (*EngineError, which keeps the answer) and, for Pictures, a
+// success without a picture: none of them is work that can be billed.
 func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFunc {
 	client := opts.Client
 	if client == nil {
@@ -75,10 +76,6 @@ func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFun
 	addrFn := opts.AddrFunc
 	if addrFn == nil {
 		addrFn = func(s setup.ServiceEntry) string { return s.Addr }
-	}
-	decodeImage := true
-	if opts.DecodeOpenAIImage != nil {
-		decodeImage = *opts.DecodeOpenAIImage
 	}
 
 	return func(ctx context.Context, job *Job) (int, string, []byte, error) {
@@ -150,11 +147,20 @@ func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFun
 				// Idle-bounded: streamSentenceChunks resets the watchdog on each
 				// chunk, so a progressing generation never times out — only a
 				// stalled stream (no chunk for `timeout`) does.
-				return streamSentenceChunks(reqCtx, resp, job, opts.StreamPath, watchdog, timeout)
+				streamPath := opts.StreamPath
+				if isCompletions(job.Path) {
+					streamPath = completionText
+				}
+				return streamSentenceChunks(reqCtx, resp, job, streamPath, watchdog, timeout)
 			}
 			body, rerr := io.ReadAll(resp.Body)
 			if rerr != nil {
 				return 0, "", nil, rerr
+			}
+			// An engine refusing the request answers JSON instead of a stream.
+			// That is a failed job, not a chunk of the answer.
+			if !success(resp.StatusCode) {
+				return 0, "", nil, &EngineError{Code: resp.StatusCode, ContentType: respCT, Body: body}
 			}
 			if len(body) > 0 {
 				job.AppendChunk(string(body)) // non-SSE fallback: one chunk
@@ -169,18 +175,15 @@ func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFun
 
 		code := resp.StatusCode
 		ct := resp.Header.Get("Content-Type")
-
-		// OpenAI image decode (sd-api convention): success + JSON body with
-		// {data:[{b64_json}]} → unwrap to raw image bytes.
-		if decodeImage && code >= 200 && code < 300 && strings.Contains(ct, "json") {
-			if pngBytes, ok := decodeOpenAIImageBody(body); ok {
-				body = pngBytes
-				ct = "image/png"
-			}
+		if !success(code) {
+			return 0, "", nil, &EngineError{Code: code, ContentType: ct, Body: body}
+		}
+		if opts.Pictures && !hasPicture(ct, body) {
+			return 0, "", nil, fmt.Errorf("engine answered %d without a picture", code)
 		}
 
-		// Persist to disk on success when storage is wired.
-		if opts.Storage != nil && code >= 200 && code < 300 && len(body) > 0 {
+		// Persist to disk when storage is wired.
+		if opts.Storage != nil && len(body) > 0 {
 			if opts.Storage.Save(job, body, ct) {
 				return code, ct, nil, nil // body persisted, drop in-memory copy
 			}
@@ -192,30 +195,86 @@ func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFun
 	}
 }
 
-// decodeOpenAIImageBody parses an OpenAI images.generations-style payload
-// and returns the first b64_json image as raw bytes. Returns false when
-// the payload does not match.
-//
-// Same logic as engine-runner's decodeOpenAIImage; will be the single
-// source of truth once Phase 8 deletes the engine-runner copy.
-func decodeOpenAIImageBody(body []byte) ([]byte, bool) {
+// EngineError is an engine that answered 4xx or 5xx. The job fails, so the
+// payment gate does not bill it, and the answer is kept: the result door gives
+// it back with the engine's own status (jobs_handler writeFailed).
+type EngineError struct {
+	Code        int
+	ContentType string
+	Body        []byte
+}
+
+func (e *EngineError) Error() string {
+	return fmt.Sprintf("engine answered %d: %s", e.Code, errorMessage(e.Body))
+}
+
+func success(code int) bool { return code >= 200 && code < 300 }
+
+// errorMessage is the message in an engine's error body ({"error": {"message":
+// …}}, {"error": "…"}, {"message": …} or {"detail": …}), else the body itself,
+// cut short.
+func errorMessage(body []byte) string {
+	var m struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  string          `json:"detail"`
+	}
+	msg := ""
+	if json.Unmarshal(body, &m) == nil {
+		var s string
+		var inner struct {
+			Message string `json:"message"`
+		}
+		switch {
+		case json.Unmarshal(m.Error, &s) == nil && s != "":
+			msg = s
+		case json.Unmarshal(m.Error, &inner) == nil && inner.Message != "":
+			msg = inner.Message
+		case m.Message != "":
+			msg = m.Message
+		case m.Detail != "":
+			msg = m.Detail
+		}
+	}
+	if msg == "" {
+		msg = strings.TrimSpace(string(body))
+	}
+	if r := []rune(msg); len(r) > 300 {
+		msg = string(r[:300]) + "…"
+	}
+	return msg
+}
+
+// hasPicture reports an answer that carries at least one picture: an image
+// body, or OpenAI images JSON with a b64_json or url entry.
+func hasPicture(contentType string, body []byte) bool {
+	if strings.HasPrefix(contentType, "image/") {
+		return len(body) > 0
+	}
 	var payload struct {
 		Data []struct {
 			B64JSON string `json:"b64_json"`
+			URL     string `json:"url"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, false
+	if json.Unmarshal(body, &payload) != nil {
+		return false
 	}
-	if len(payload.Data) == 0 || payload.Data[0].B64JSON == "" {
-		return nil, false
+	for _, d := range payload.Data {
+		if d.B64JSON != "" || d.URL != "" {
+			return true
+		}
 	}
-	raw, err := base64.StdEncoding.DecodeString(payload.Data[0].B64JSON)
-	if err != nil {
-		return nil, false
-	}
-	return raw, true
+	return false
 }
+
+// completionText is where a /v1/completions stream chunk carries its text.
+const completionText = "choices[0].text"
+
+// isCompletions reports the OpenAI completions path. Its stream carries text
+// (choices[0].text), not the chat delta the manifest's stream_path names, and
+// its answer is a text_completion, not a chat.completion.
+func isCompletions(path string) bool { return path == "/v1/completions" }
 
 // forceStreamFlag injects "stream": true (+ stream_options.include_usage) into a
 // JSON-object engine body so a streamable engine emits SSE even when the client
@@ -249,7 +308,8 @@ func forceStreamFlag(body []byte) []byte {
 // appends completed sentences to the job as it goes (so a poller sees
 // chunk_count grow). It also captures the stream's metadata (the last chunk's
 // id/model/finish_reason + the usage chunk) and reassembles a non-streaming
-// OpenAI chat.completion response: returned as the result body (application/
+// OpenAI chat.completion response (a text_completion for /v1/completions):
+// returned as the result body (application/
 // json) so `infer result` extracts content via content_path and `-json` shows
 // usage/timings/etc. The message-excluded metadata is stored on the job
 // (job.SetMeta) for `infer chunk --index -1` (the EOF marker). Stops on
@@ -311,6 +371,15 @@ func streamSentenceChunks(ctx context.Context, resp *http.Response, job *Job, st
 		return 0, "", nil, fmt.Errorf("engine stream stalled: no chunk for %s", idle)
 	}
 
+	code := resp.StatusCode
+	if code == 0 {
+		code = http.StatusOK
+	}
+	if isCompletions(job.Path) {
+		job.SetMeta(assembleCompletionResult(lastWithChoices, usageObj, full.String(), false))
+		return code, "application/json", assembleCompletionResult(lastWithChoices, usageObj, full.String(), true), nil
+	}
+
 	var toolCalls []any
 	for _, idx := range toolOrder {
 		toolCalls = append(toolCalls, toolAcc[idx])
@@ -318,12 +387,35 @@ func streamSentenceChunks(ctx context.Context, resp *http.Response, job *Job, st
 
 	job.SetMeta(assembleStreamResult(lastWithChoices, usageObj, full.String(), toolCalls, false))
 	fullJSON := assembleStreamResult(lastWithChoices, usageObj, full.String(), toolCalls, true)
-
-	code := resp.StatusCode
-	if code == 0 {
-		code = http.StatusOK
-	}
 	return code, "application/json", fullJSON, nil
+}
+
+// assembleCompletionResult is assembleStreamResult for /v1/completions: the
+// last choices-bearing chunk as a "text_completion", usage folded in, and
+// choices[0].text holding the whole text (withText) or dropped (the EOF
+// marker's metadata).
+func assembleCompletionResult(last map[string]any, usage any, text string, withText bool) []byte {
+	var obj map[string]any
+	if last != nil {
+		obj = cloneJSONObj(last)
+	} else {
+		obj = map[string]any{"choices": []any{map[string]any{"index": 0}}}
+	}
+	obj["object"] = "text_completion"
+	if usage != nil {
+		obj["usage"] = usage
+	}
+	if chs, ok := obj["choices"].([]any); ok && len(chs) > 0 {
+		if ch0, ok := chs[0].(map[string]any); ok {
+			if withText {
+				ch0["text"] = text
+			} else {
+				delete(ch0, "text")
+			}
+		}
+	}
+	b, _ := json.Marshal(obj)
+	return b
 }
 
 // assembleStreamResult reconstructs a non-streaming OpenAI chat.completion JSON

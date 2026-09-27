@@ -113,6 +113,9 @@ func initQueueSubsystem(ctx context.Context, cfg tunnel.Config, packagesDir stri
 		opts.Timeout = 60 * time.Second
 		if m != nil && m.API.Run != nil && m.API.Run.Result.Modality == "image" {
 			opts.Timeout = 600 * time.Second
+			// A picture job that comes back without a picture fails, so the
+			// payment gate does not bill it.
+			opts.Pictures = true
 		}
 
 		// External engines (vLLM, future Ollama/TGI) get the metrics-driven

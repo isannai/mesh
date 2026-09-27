@@ -105,3 +105,67 @@ func TestBufferedClientInternalStreamsAndReassembles(t *testing.T) {
 		t.Errorf("usage not carried through: %s", string(body))
 	}
 }
+
+// A /v1/completions job streams text (choices[0].text), not chat deltas. The
+// station reads its tokens from there, and the result is a text_completion
+// carrying the whole text; before, every token was missed and the answer came
+// back empty while its usage was still billed.
+func TestCompletionsJobKeepsItsText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for _, c := range []string{
+			`{"id":"cmpl-1","object":"text_completion","model":"m","choices":[{"index":0,"text":"Once upon ","finish_reason":null}]}`,
+			`{"id":"cmpl-1","object":"text_completion","model":"m","choices":[{"index":0,"text":"a time.","finish_reason":null}]}`,
+			`{"id":"cmpl-1","object":"text_completion","model":"m","choices":[{"index":0,"text":"","finish_reason":"stop"}]}`,
+			`{"id":"cmpl-1","object":"text_completion","model":"m","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`,
+		} {
+			io.WriteString(w, "data: "+c+"\n\n")
+		}
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	svc := setup.ServiceEntry{Name: "llm", Addr: strings.TrimPrefix(srv.URL, "http://")}
+	proc := MakeManagedProcess(svc, DispatchOptions{StreamPath: "choices[0].delta.content", Timeout: 2 * time.Second})
+	job := &Job{ID: "c1", Path: "/v1/completions", Stream: true, RequestBody: []byte(`{"prompt":"Tell me"}`)}
+
+	code, ct, body, err := proc(context.Background(), job)
+	if err != nil || code != http.StatusOK || !strings.Contains(ct, "json") {
+		t.Fatalf("proc: %d %q %v", code, ct, err)
+	}
+	var res struct {
+		Object  string `json:"object"`
+		Choices []struct {
+			Text         string `json:"text"`
+			FinishReason string `json:"finish_reason"`
+			Message      any    `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		t.Fatalf("result %s: %v", body, err)
+	}
+	if res.Object != "text_completion" || len(res.Choices) != 1 || res.Choices[0].Text != "Once upon a time." ||
+		res.Choices[0].FinishReason != "stop" || res.Choices[0].Message != nil || res.Usage.TotalTokens != 7 {
+		t.Fatalf("result %s, want a text_completion with the whole text, stop, usage 7", body)
+	}
+
+	var chunks strings.Builder
+	for i := 0; i < job.ChunkCount(); i++ {
+		c, _ := job.ChunkAt(i)
+		chunks.WriteString(c)
+	}
+	if chunks.String() != "Once upon a time." {
+		t.Errorf("chunks %q, want the text", chunks.String())
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(job.Meta(), &meta); err != nil || meta["object"] != "text_completion" {
+		t.Errorf("EOF metadata %s, want a text_completion", job.Meta())
+	}
+	if ch, _ := meta["choices"].([]any); len(ch) != 1 || ch[0].(map[string]any)["text"] != nil {
+		t.Errorf("EOF metadata %s carries the text", job.Meta())
+	}
+}

@@ -337,11 +337,10 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusGatewayTimeout, errorResponse{Error: werr.Error()})
 			return
 		}
-		// A failed job carries its message on job.Error (ResponseCode/Body stay
-		// unset), so surface it as an error — the SAME shape the /result GET
-		// returns — instead of an empty 200 a sync caller can't tell from success.
+		// A failed job answers the way the /result GET does (writeFailed),
+		// instead of an empty 200 a sync caller can't tell from success.
 		if done.Status == queue.StatusFailed {
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: done.Error})
+			writeFailed(w, done)
 			return
 		}
 		// Stream the actual result body back (status code from upstream).
@@ -436,7 +435,7 @@ func (h *JobsHandler) handleByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if job.Status == queue.StatusFailed {
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: job.Error})
+		writeFailed(w, job)
 		if consume {
 			h.deleteJob(job.ID)
 		}
@@ -455,6 +454,23 @@ func (h *JobsHandler) handleByID(w http.ResponseWriter, r *http.Request) {
 	if consume {
 		h.deleteJob(job.ID)
 	}
+}
+
+// writeFailed answers for a failed job. An engine that refused the request
+// (queue.EngineError) is answered as it answered: its status and body. Any
+// other failure is a 500 with the reason.
+func writeFailed(w http.ResponseWriter, job *queue.Job) {
+	if job.ResponseCode >= 400 && len(job.ResponseBody) > 0 {
+		ct := job.ResponseType
+		if ct == "" {
+			ct = "application/json"
+		}
+		w.Header().Set("Content-Type", ct)
+		w.WriteHeader(job.ResponseCode)
+		_, _ = w.Write(job.ResponseBody)
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, errorResponse{Error: job.Error})
 }
 
 // handleDelete handles DELETE /v1/jobs/{id}. Removes a finished

@@ -3,7 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -173,10 +173,12 @@ func TestManagedProcessStreamingFallback(t *testing.T) {
 	}
 }
 
-func TestManagedProcessOpenAIImageDecode(t *testing.T) {
-	pngBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A}
-	encoded := base64.StdEncoding.EncodeToString(pngBytes)
-	respJSON := []byte(`{"data":[{"b64_json":"` + encoded + `"}]}`)
+// An OpenAI images answer is the result as the engine gave it: every picture
+// of an n > 1 job stays in it (it used to be cut down to the first picture).
+func TestManagedProcessKeepsEveryPicture(t *testing.T) {
+	first := base64.StdEncoding.EncodeToString([]byte{0x89, 'P', 'N', 'G', 1})
+	second := base64.StdEncoding.EncodeToString([]byte{0x89, 'P', 'N', 'G', 2})
+	respJSON := []byte(`{"created":1,"data":[{"b64_json":"` + first + `"},{"b64_json":"` + second + `"}]}`)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -185,40 +187,42 @@ func TestManagedProcessOpenAIImageDecode(t *testing.T) {
 	defer srv.Close()
 
 	svc := setup.ServiceEntry{Name: "sd-api", Addr: addrFromTestServer(srv)}
-	process := MakeManagedProcess(svc, DispatchOptions{})
+	process := MakeManagedProcess(svc, DispatchOptions{Pictures: true})
 
 	job := &Job{ID: "x", Path: "/v1/images/generations"}
-	code, ct, body, _ := process(context.Background(), job)
-	if code != 200 {
-		t.Fatalf("code = %d", code)
+	code, ct, body, err := process(context.Background(), job)
+	if err != nil || code != 200 {
+		t.Fatalf("process: %d %v", code, err)
 	}
-	if ct != "image/png" {
-		t.Errorf("expected ct=image/png after decode, got %q", ct)
-	}
-	if string(body) != string(pngBytes) {
-		t.Errorf("body decoded incorrectly: got %x", body)
+	if ct != "application/json" || string(body) != string(respJSON) {
+		t.Errorf("result %q %s, want the engine's answer unchanged", ct, body)
 	}
 }
 
-func TestManagedProcessOpenAIDecodeDisabled(t *testing.T) {
-	// JSON 그대로 전달돼야 함 (decode=false).
-	respJSON := []byte(`{"data":[{"b64_json":"AAAA"}]}`)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(respJSON)
-	}))
-	defer srv.Close()
-
-	off := false
-	svc := setup.ServiceEntry{Name: "test", Addr: addrFromTestServer(srv)}
-	process := MakeManagedProcess(svc, DispatchOptions{DecodeOpenAIImage: &off})
-
-	_, ct, body, _ := process(context.Background(), &Job{Path: "/x"})
-	if ct != "application/json" {
-		t.Errorf("ct = %q (decode should be skipped)", ct)
-	}
-	if !json.Valid(body) {
-		t.Error("body should still be valid JSON")
+// A picture service that answers success without a picture failed: the job is
+// not done, so the payment gate has nothing to bill.
+func TestManagedProcessPictureless(t *testing.T) {
+	for _, tc := range []struct {
+		name, ct, body string
+		pictures, fail bool
+	}{
+		{"empty data", "application/json", `{"created":1,"data":[]}`, true, true},
+		{"not images JSON", "application/json", `{"ok":true}`, true, true},
+		{"a picture", "application/json", `{"data":[{"b64_json":"AAAA"}]}`, true, false},
+		{"a url", "application/json", `{"data":[{"url":"/x.png"}]}`, true, false},
+		{"image body", "image/png", "PNG", true, false},
+		{"not a picture service", "application/json", `{"ok":true}`, false, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", tc.ct)
+			w.Write([]byte(tc.body))
+		}))
+		svc := setup.ServiceEntry{Name: "sd-api", Addr: addrFromTestServer(srv)}
+		_, _, _, err := MakeManagedProcess(svc, DispatchOptions{Pictures: tc.pictures})(context.Background(), &Job{Path: "/v1/images/generations"})
+		srv.Close()
+		if (err != nil) != tc.fail {
+			t.Errorf("%s: err = %v, want failed=%v", tc.name, err, tc.fail)
+		}
 	}
 }
 
@@ -274,28 +278,53 @@ func TestManagedProcessNoStorageKeepsBody(t *testing.T) {
 	}
 }
 
-func TestManagedProcessHTTPErrorPropagates(t *testing.T) {
-	// 5xx 응답은 err 가 아니라 code/body 로 전달돼야 함 (queue.runJob 의 분기를
-	// 위해). err 는 transport-level 오류만 표현.
+// An engine that answers 4xx/5xx fails the job (so it is never billed as
+// done work), and the answer rides on the error for the result door.
+func TestManagedProcessEngineErrorFailsJob(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(500)
-		w.Write([]byte(`{"error":"oops"}`))
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":{"code":400,"message":"prompt is too long"}}`))
 	}))
 	defer srv.Close()
 
 	svc := setup.ServiceEntry{Name: "x", Addr: addrFromTestServer(srv)}
 	process := MakeManagedProcess(svc, DispatchOptions{})
 
-	code, _, body, err := process(context.Background(), &Job{Path: "/x"})
-	if err != nil {
-		t.Errorf("transport err should be nil, got %v", err)
+	_, _, _, err := process(context.Background(), &Job{Path: "/x"})
+	var ee *EngineError
+	if !errors.As(err, &ee) {
+		t.Fatalf("err = %v, want *EngineError", err)
 	}
-	if code != 500 {
-		t.Errorf("code = %d", code)
+	if ee.Code != 400 || ee.ContentType != "application/json" || !strings.Contains(string(ee.Body), "prompt is too long") {
+		t.Errorf("engine answer %d %q %s", ee.Code, ee.ContentType, ee.Body)
 	}
-	if !strings.Contains(string(body), "oops") {
-		t.Errorf("body = %q", string(body))
+	if err.Error() != "engine answered 400: prompt is too long" {
+		t.Errorf("message %q", err.Error())
+	}
+}
+
+// A streamable engine that refuses the request answers JSON instead of a
+// stream. The job fails; the refusal is not kept as a chunk of the answer.
+func TestManagedProcessStreamingRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":{"code":400,"message":"the request exceeds the available context size"}}`))
+	}))
+	defer srv.Close()
+
+	svc := setup.ServiceEntry{Name: "llm-api", Addr: addrFromTestServer(srv)}
+	process := MakeManagedProcess(svc, DispatchOptions{StreamPath: "choices[0].delta.content"})
+	job := &Job{ID: "r1", Path: "/v1/chat/completions", RequestBody: []byte(`{}`), Stream: true}
+
+	_, _, _, err := process(context.Background(), job)
+	var ee *EngineError
+	if !errors.As(err, &ee) || ee.Code != 400 {
+		t.Fatalf("err = %v, want the engine's 400", err)
+	}
+	if job.ChunkCount() != 0 {
+		t.Errorf("chunk_count = %d, want 0", job.ChunkCount())
 	}
 }
 

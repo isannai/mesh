@@ -536,19 +536,16 @@ func (f *Firer) AwaitJSON(jobsBase, jobID string, deadline time.Duration) ([]byt
 
 // imageResult reads the finished body and returns the image as base64.
 //
-// 🔴 THE STATION SERVES DECODED BYTES, NOT JSON. `/v1/jobs/<id>/result` answers
-// `Content-Type: image/png` with the PNG itself:
+// 🔴 TWO SHAPES ARRIVE ON THE SAME ENDPOINT. `/v1/jobs/<id>/result` is the
+// engine's OpenAI images answer as it gave it (`{"data":[{"b64_json":…}]}`, every
+// picture of the job). A station from before that answered with the first
+// picture's bytes, `Content-Type: image/png`:
 //
 //	89 50 4e 47 0d 0a 1a 0a  …
 //
-// The manifest's `result.content_path: data[0].b64_json` describes how the
-// STATION parses the ENGINE's reply — it is not the shape the station passes on.
-// Reading it as the client contract made every collected image fail with
-// "reply carries no image" 87 seconds after a picture had been drawn correctly.
-//
-// Both shapes are accepted anyway. The station is one hop, and a node reached
-// another way (or a future engine whose station forwards the JSON verbatim) can
-// still answer in the OpenAI shape.
+// Reading only one of them as the contract made every collected image fail with
+// "reply carries no image" 87 seconds after a picture had been drawn correctly,
+// and the network runs both stations until every node is updated.
 func (f *Firer) imageResult(base, jobID string) (string, error) {
 	body, code, ctype, err := f.getLargeTyped(base+"/v1/jobs/"+url.PathEscape(jobID)+"/result", 120*time.Second)
 	if err != nil {
@@ -558,7 +555,7 @@ func (f *Firer) imageResult(base, jobID string) (string, error) {
 		return "", fmt.Errorf("job result: HTTP %d", code)
 	}
 
-	// Raw image bytes — the normal path. Decided on Content-Type rather than by
+	// Raw image bytes (an older station). Decided on Content-Type rather than by
 	// sniffing the first bytes, so a truncated or corrupt image reports as
 	// exactly that instead of silently falling through to "no image".
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ctype)), "image/") {
