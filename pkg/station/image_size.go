@@ -22,6 +22,14 @@ package station
 //
 // A body that leaves the size out passes: a run gets the manifest's 512x512,
 // a raw engine body gets the engine's own default.
+//
+// steps is bounded here too, 1 to maxSteps (station only, the gate does not
+// look at it). A picture is billed by size and count, so without a bound one
+// request at steps 500 holds the GPU 25 times as long as the default 20 for
+// the same price. sd.cpp reads steps from the prompt, wrapped as
+// <sd_cpp_extra_args>{"steps":20}</sd_cpp_extra_args> (the manifest's
+// extra_args), and a prompt that arrives already wrapped goes to the engine
+// as it is, so both the body field and the wrapped JSON are checked.
 
 import (
 	"bytes"
@@ -57,10 +65,27 @@ var pictureArchSizes = map[string][]string{
 // maxPictures bounds n per request.
 const maxPictures = 16
 
+// maxSteps bounds sampling steps per picture (default 20; SD1.5 · SDXL · SD3 ·
+// flux-dev all look done by 40).
+const maxSteps = 40
+
+// stepFields are the names a step count arrives under: steps (the manifest)
+// and sample_steps (sd.cpp's own name for it).
+var stepFields = []string{"steps", "sample_steps"}
+
+// extraArgsTag wraps the JSON sd.cpp reads out of the prompt.
+const extraArgsTag = "sd_cpp_extra_args"
+
 // reasonImageSize is the gate's reason code for the same refusal.
 const reasonImageSize = "image_size_unsupported"
 
-var errPictureSize = errors.New("image size not accepted")
+// reasonImageSteps is the reason code for a step count out of bounds.
+const reasonImageSteps = "image_steps_unsupported"
+
+var (
+	errPictureSize  = errors.New("image size not accepted")
+	errPictureSteps = errors.New("image steps not accepted")
+)
 
 // isPictureService reports whether a service's default run makes pictures.
 func isPictureService(api *manifest.APISpec) bool {
@@ -92,10 +117,15 @@ func checkPictureRequest(contentType string, body []byte, arch string) error {
 				break
 			}
 			switch name := part.FormName(); name {
-			case "size", "width", "height", "n":
+			case "size", "width", "height", "n", "steps", "sample_steps":
 				if part.FileName() == "" {
 					v, _ := io.ReadAll(io.LimitReader(part, 64))
 					fields[name] = strings.TrimSpace(string(v))
+				}
+			case "prompt":
+				if part.FileName() == "" {
+					v, _ := io.ReadAll(io.LimitReader(part, 1<<20))
+					fields[name] = string(v)
 				}
 			}
 			part.Close()
@@ -110,7 +140,7 @@ func checkPictureRequest(contentType string, body []byte, arch string) error {
 }
 
 // checkPicture refuses a size off the table, a size the architecture does not
-// draw, and a count outside 1..maxPictures.
+// draw, a count outside 1..maxPictures and steps outside 1..maxSteps.
 func checkPicture(fields map[string]any, arch string) error {
 	size, err := pictureSize(fields)
 	if err != nil {
@@ -128,6 +158,45 @@ func checkPicture(fields map[string]any, arch string) error {
 	if v, present := fields["n"]; present {
 		if k, ok := wholeNumber(v); !ok || k < 1 || k > maxPictures {
 			return fmt.Errorf("%w: n must be 1 to %d", errPictureSize, maxPictures)
+		}
+	}
+	return checkSteps(fields)
+}
+
+// checkSteps refuses steps outside 1..maxSteps, given as a body field or in
+// the extra-args JSON wrapped into the prompt. Wrapped text that is not JSON
+// is refused: the check cannot see what the engine would read from it.
+func checkSteps(fields map[string]any) error {
+	sets := []map[string]any{fields}
+	if prompt, ok := fields["prompt"].(string); ok {
+		open, closing := "<"+extraArgsTag+">", "</"+extraArgsTag+">"
+		for rest := prompt; ; {
+			i := strings.Index(rest, open)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(open):]
+			j := strings.Index(rest, closing)
+			if j < 0 {
+				j = len(rest)
+			}
+			var extra map[string]any
+			if json.Unmarshal([]byte(rest[:j]), &extra) != nil {
+				return fmt.Errorf("%w: the %s in the prompt is not a JSON object", errPictureSteps, extraArgsTag)
+			}
+			sets = append(sets, extra)
+			rest = rest[j:]
+		}
+	}
+	for _, set := range sets {
+		for _, name := range stepFields {
+			v, present := set[name]
+			if !present || v == nil || v == "" {
+				continue
+			}
+			if k, ok := wholeNumber(v); !ok || k < 1 || k > maxSteps {
+				return fmt.Errorf("%w: %s must be 1 to %d", errPictureSteps, name, maxSteps)
+			}
 		}
 	}
 	return nil
@@ -197,5 +266,9 @@ func contains(list []string, s string) bool {
 
 // refusePicture answers a refused picture request the way the gate does.
 func refusePicture(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error(), Reason: reasonImageSize})
+	reason := reasonImageSize
+	if errors.Is(err, errPictureSteps) {
+		reason = reasonImageSteps
+	}
+	writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error(), Reason: reason})
 }

@@ -53,6 +53,41 @@ func TestCheckPicture(t *testing.T) {
 	}
 }
 
+// TestCheckPictureSteps: steps 1..maxSteps, as a body field or wrapped into the
+// prompt the way sd.cpp reads it.
+func TestCheckPictureSteps(t *testing.T) {
+	cases := []struct {
+		body string
+		ok   bool
+	}{
+		{`{"prompt":"x","steps":20}`, true},
+		{`{"prompt":"x","steps":40}`, true},
+		{`{"prompt":"x","steps":"40"}`, true}, // a ${steps} template arrives as a string
+		{`{"prompt":"x","steps":41}`, false},
+		{`{"prompt":"x","steps":0}`, false},
+		{`{"prompt":"x","steps":-5}`, false},
+		{`{"prompt":"x","steps":20.5}`, false},
+		{`{"prompt":"x","steps":""}`, true}, // empty: the engine's default
+		{`{"prompt":"x","sample_steps":500}`, false},
+		{`{"prompt":"x<sd_cpp_extra_args>{\"steps\":30,\"seed\":1}</sd_cpp_extra_args>"}`, true},
+		{`{"prompt":"x<sd_cpp_extra_args>{\"steps\":500}</sd_cpp_extra_args>"}`, false},
+		{`{"prompt":"x<sd_cpp_extra_args>{\"sample_steps\":500}</sd_cpp_extra_args>"}`, false},
+		{`{"prompt":"a<sd_cpp_extra_args>{\"seed\":1}</sd_cpp_extra_args>b<sd_cpp_extra_args>{\"steps\":99}</sd_cpp_extra_args>"}`, false},
+		{`{"prompt":"x<sd_cpp_extra_args>steps=500</sd_cpp_extra_args>"}`, false}, // not JSON: cannot be checked
+		{`{"prompt":"x<sd_cpp_extra_args>{\"steps\":500}"}`, false},               // no closing tag
+		{`{"prompt":"x"}`, true}, // no steps: the default applies
+	}
+	for _, c := range cases {
+		err := checkPictureRequest("application/json", []byte(c.body), "sd15")
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, want ok=%v", c.body, err, c.ok)
+		}
+		if err != nil && !errors.Is(err, errPictureSteps) {
+			t.Errorf("%s: %v is not errPictureSteps", c.body, err)
+		}
+	}
+}
+
 // TestCheckPictureMultipart: an img2img edit carries its size as a form field.
 func TestCheckPictureMultipart(t *testing.T) {
 	form := func(size string) (string, []byte) {
@@ -72,6 +107,23 @@ func TestCheckPictureMultipart(t *testing.T) {
 	ct, body = form("512x512")
 	if err := checkPictureRequest(ct, body, "sd15"); err != nil {
 		t.Errorf("multipart 512x512: %v", err)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("prompt", `a cat<sd_cpp_extra_args>{"steps":500}</sd_cpp_extra_args>`)
+	mw.WriteField("size", "512x512")
+	mw.Close()
+	if err := checkPictureRequest(mw.FormDataContentType(), buf.Bytes(), "sd15"); !errors.Is(err, errPictureSteps) {
+		t.Errorf("multipart wrapped steps 500: %v, want errPictureSteps", err)
+	}
+	buf.Reset()
+	mw = multipart.NewWriter(&buf)
+	mw.WriteField("prompt", "a cat")
+	mw.WriteField("steps", "41")
+	mw.Close()
+	if err := checkPictureRequest(mw.FormDataContentType(), buf.Bytes(), "sd15"); !errors.Is(err, errPictureSteps) {
+		t.Errorf("multipart steps 41: %v, want errPictureSteps", err)
 	}
 }
 
@@ -130,6 +182,15 @@ func TestSubmitRefusesPictureSize(t *testing.T) {
 			t.Errorf("%s: %d %+v, want 400 %s", body, code, er, reasonImageSize)
 		}
 	}
+	for _, body := range []string{
+		`{"service":"sd-api","params":{"prompt":"x","steps":41}}`,
+		`{"service":"sd-api","run":{"prompt":"x<sd_cpp_extra_args>{\"steps\":500}</sd_cpp_extra_args>"}}`,
+	} {
+		code, er := submit(body)
+		if code != http.StatusBadRequest || er.Reason != reasonImageSteps || !strings.Contains(er.Error, "image steps not accepted") {
+			t.Errorf("%s: %d %+v, want 400 %s", body, code, er, reasonImageSteps)
+		}
+	}
 	if n := hits.Load(); n != 0 {
 		t.Fatalf("engine was called %d times for refused pictures", n)
 	}
@@ -170,6 +231,9 @@ func TestServiceProxyRefusesPictureSize(t *testing.T) {
 	}
 	if code := post(`{"prompt":"x","size":"1024x1024"}`); code != http.StatusBadRequest {
 		t.Errorf("1024x1024 on sd15 = %d, want 400", code)
+	}
+	if code := post(`{"prompt":"x<sd_cpp_extra_args>{\"steps\":500}</sd_cpp_extra_args>","size":"512x512"}`); code != http.StatusBadRequest {
+		t.Errorf("wrapped steps 500 = %d, want 400", code)
 	}
 	if n := hits.Load(); n != 0 {
 		t.Fatalf("engine was called %d times for refused pictures", n)
