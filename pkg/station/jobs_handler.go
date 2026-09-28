@@ -62,6 +62,10 @@ type JobsHandler struct {
 	// fail fast (503) instead of queuing a job that can only fail at dispatch.
 	// nil disables the gate (tests). docs/TODO/isann-cli-phase3.md.
 	engineDown func(service string) bool
+
+	// archOf names the model architecture behind a picture service (the
+	// engine .env ARCH), for the size check (image_size.go).
+	archOf func(setup.ServiceEntry) string
 }
 
 // NewJobsHandler builds a handler. Pass nil services for tests; production
@@ -70,7 +74,8 @@ type JobsHandler struct {
 // mapping / path gating / wire encoding (pass nil to disable — the body is
 // then forwarded verbatim).
 func NewJobsHandler(mgr *queue.Manager, storage *queue.Storage, services []setup.ServiceEntry, apiFor func(string) *manifest.APISpec, engineDown func(string) bool) *JobsHandler {
-	return &JobsHandler{mgr: mgr, storage: storage, services: services, apiFor: apiFor, engineDown: engineDown}
+	return &JobsHandler{mgr: mgr, storage: storage, services: services, apiFor: apiFor, engineDown: engineDown,
+		archOf: engineArch}
 }
 
 // apiSpec resolves the manifest api block for a service, or nil.
@@ -132,6 +137,7 @@ type submitResponse struct {
 // errorResponse is the 4xx/5xx body.
 type errorResponse struct {
 	Error      string `json:"error"`
+	Reason     string `json:"reason,omitempty"`
 	QueueDepth int    `json:"queue_depth,omitempty"`
 	QueueMax   int    `json:"queue_max,omitempty"`
 }
@@ -219,6 +225,21 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A picture the engine cannot make is refused here, before it queues
+	// (image_size.go): the engine body of a params submit, the mapped body of
+	// a run.
+	picture := isPictureService(api)
+	arch := ""
+	if picture && h.archOf != nil {
+		arch = h.archOf(svc)
+	}
+	if picture && len(req.Run) == 0 && len(req.Params) > 0 {
+		if err := checkPictureRequest("application/json", req.Params, arch); err != nil {
+			refusePicture(w, err)
+			return
+		}
+	}
+
 	jobPath := req.Path
 	if jobPath == "" {
 		jobPath = "/v1/inference"
@@ -249,6 +270,12 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 			return
+		}
+		if picture {
+			if err := checkPictureRequest("application/json", mapped, arch); err != nil {
+				refusePicture(w, err)
+				return
+			}
 		}
 		// extra_args: relocate body fields into the prompt for engines that
 		// ignore top-level params (sd.cpp). No-op when not declared.

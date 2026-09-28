@@ -43,14 +43,27 @@ func engineEnvConcurrency(root string, svc setup.ServiceEntry, m *manifest.Manif
 
 // readEnvInt reads a KEY=VALUE .env file (the shell-sourced engine env) and
 // returns the positive integer value of key, or 0 when the file/key is missing
-// or the value doesn't parse to a positive int. Tolerates blank lines, '#'
-// comment lines, surrounding whitespace, an optional "export " prefix, single/
-// double quotes around the value, and an inline trailing comment on unquoted
-// values. The first matching key wins.
+// or the value doesn't parse to a positive int.
 func readEnvInt(path, key string) int {
+	val, ok := readEnvValue(path, key)
+	if !ok {
+		return 0
+	}
+	if n, err := strconv.Atoi(val); err == nil && n > 0 {
+		return n
+	}
+	return 0
+}
+
+// readEnvValue returns the value of key in a KEY=VALUE .env file, ok=false when
+// the file or the key is missing. Tolerates blank lines, '#' comment lines,
+// surrounding whitespace, an optional "export " prefix, single/double quotes
+// around the value, and an inline trailing comment on unquoted values. The
+// first matching key wins, even when its value is empty.
+func readEnvValue(path, key string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0
+		return "", false
 	}
 	defer f.Close()
 
@@ -76,11 +89,7 @@ func readEnvInt(path, key string) int {
 				val = strings.TrimSpace(val[:h])
 			}
 		}
-		val = strings.Trim(val, `"'`)
-		if n, err := strconv.Atoi(val); err == nil && n > 0 {
-			return n
-		}
-		return 0 // key found but unusable — don't keep scanning for a dupe
+		return strings.Trim(val, `"'`), true
 	}
-	return 0
+	return "", false
 }

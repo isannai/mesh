@@ -73,6 +73,9 @@ type Provider struct {
 	storage     *queue.Storage
 	jobsHandler *JobsHandler
 
+	// pictureRuleFor replaces pictureRule (tests: no manifest on disk).
+	pictureRuleFor func(svcName string) (arch string, picture bool)
+
 	// Phase 3 event-driven heartbeat: queue lifecycle hooks (job started /
 	// completed / failed) post a wake signal here. runHeartbeatLoop selects
 	// on this alongside the periodic ticker, so RV sees state changes within
@@ -384,6 +387,19 @@ func (p *Provider) routeServiceJobsPath(w http.ResponseWriter, r *http.Request, 
 	return false
 }
 
+// pictureRule reports whether a service makes pictures, and the model
+// architecture behind it (the engine .env ARCH), for the size check.
+func (p *Provider) pictureRule(svcName string) (string, bool) {
+	if p.pictureRuleFor != nil {
+		return p.pictureRuleFor(svcName)
+	}
+	if !isPictureService(p.apiSpecFor(svcName)) {
+		return "", false
+	}
+	svc, _ := p.findService(svcName)
+	return engineArch(svc), true
+}
+
 // apiSpecFor resolves a service's manifest api block, or nil when the service
 // has no manifest. Injected into JobsHandler so submit-time param mapping can
 // find the run template(s), the path allowlist, and any wire encoding.
@@ -523,6 +539,23 @@ func (p *Provider) HandleServiceProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service not found: "+svcName, http.StatusNotFound)
 		return
 	}
+	// A picture the engine cannot make is refused before it reaches the
+	// engine (image_size.go): a free node's direct call has no gate in front.
+	if r.Method == http.MethodPost {
+		if arch, picture := p.pictureRule(svcName); picture {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := checkPictureRequest(r.Header.Get("Content-Type"), body, arch); err != nil {
+				refusePicture(w, err)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+	}
+
 	targetURL := "http://" + addr + rest
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
