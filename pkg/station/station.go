@@ -34,9 +34,6 @@ type Provider struct {
 	// Installer client for spawning installer processes
 	InstallClient *installclient.InstallClient
 
-	// Sync manager for snapshot/token management
-	syncMgr *syncManager
-
 	// Register delta tracking — keeps last-sent snapshot of static fields so
 	// subsequent registers can omit unchanged ones.
 	regMu   sync.Mutex
@@ -139,7 +136,6 @@ func New(base *tunnel.Base) *Provider {
 	return &Provider{
 		Base:           base,
 		InstallClient:  installclient.New(),
-		syncMgr:        newSyncManager(),
 		svcStates:      make(map[string]serviceState),
 		resyncCh:       make(chan struct{}, 1),
 		heartbeatNowCh: make(chan struct{}, 1),

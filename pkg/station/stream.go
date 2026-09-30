@@ -67,11 +67,10 @@ func (p *Provider) dispatchOrchestratorRequest(stream quic.Stream, req *http.Req
 
 	// Inline auth guard:
 	// - Public paths → pass through
-	// - Bearer-token paths → handler validates its own pre-shared token
 	// - Management paths → always require owner/admin IANN wallet auth
 	// - Other paths + protected mode → require owner/admin IANN wallet auth
 	// - Other paths + open mode → pass through
-	if !isPublicOrchestratorPath(path, method) && !isBearerAuthPath(path, method) &&
+	if !isPublicOrchestratorPath(path, method) &&
 		(isManagementPath(path, method) || !p.Auth.IsPublic()) {
 		if !p.verifyOrchestratorAuth(stream, req) {
 			return
@@ -123,16 +122,6 @@ func (p *Provider) dispatchOrchestratorRequest(stream quic.Stream, req *http.Req
 		p.handleUpsertProfile(stream, req)
 	case path == "/provider/profile" && method == "DELETE":
 		p.handleDeleteProfile(stream, req)
-
-	// === Sync ===
-	case path == "/provider/sync/create" && method == "POST":
-		p.handleSyncCreate(stream, req)
-	case path == "/provider/sync/status" && method == "GET":
-		p.handleSyncStatus(stream, req)
-	case path == "/provider/sync/snapshot" && method == "GET":
-		p.handleSyncSnapshot(stream, req)
-	case path == "/provider/sync/file" && method == "GET":
-		p.handleSyncFile(stream, req)
 
 	default:
 		stream.SetWriteDeadline(time.Now().Add(3 * time.Minute))
@@ -285,7 +274,7 @@ func isManagementPath(path, method string) bool {
 	if strings.HasPrefix(path, "/installer/") {
 		return true
 	}
-	// Provider management (config changes, kill, package management, sync)
+	// Provider management (config changes, kill, package management)
 	switch {
 	// Config read exposes internal addresses, paths, and toggles — owner-only.
 	case path == "/provider/config" && method == http.MethodGet:
@@ -323,13 +312,6 @@ func isManagementPath(path, method string) bool {
 	// able to demand a FullSync.
 	case path == "/provider/register" && method == http.MethodPost:
 		return true
-	// Sync management: token creation / status (owner-only)
-	// /provider/sync/snapshot and /provider/sync/file authenticate via
-	// pre-shared bearer token inside the handler (see isBearerAuthPath).
-	case path == "/provider/sync/create" && method == http.MethodPost:
-		return true
-	case path == "/provider/sync/status" && method == http.MethodGet:
-		return true
 	case path == "/provider/about" && method == http.MethodPost:
 		return true
 	case path == "/provider/emblem" && (method == http.MethodPost || method == http.MethodDelete):
@@ -356,21 +338,6 @@ func isPublicOrchestratorPath(path, method string) bool {
 		case "/provider/emblem", "/provider/about", "/provider/file":
 			return true
 		}
-	}
-	return false
-}
-
-// isBearerAuthPath returns true for paths that authenticate via a pre-shared
-// bearer token validated inside the handler itself. The orchestrator-level
-// IANN wallet auth gate must be skipped for them so the request can reach
-// the handler, which then enforces the token.
-func isBearerAuthPath(path, method string) bool {
-	if method != http.MethodGet {
-		return false
-	}
-	switch path {
-	case "/provider/sync/snapshot", "/provider/sync/file":
-		return true
 	}
 	return false
 }
@@ -1134,141 +1101,4 @@ func (p *Provider) handleSavePackage(stream quic.Stream, req *http.Request) {
 		return
 	}
 	writeHTTPResponse(stream, 200, "application/json", []byte(`{"status":"ok"}`))
-}
-
-// === Sync Handlers ===
-
-// handleSyncCreate starts async snapshot creation.
-func (p *Provider) handleSyncCreate(stream quic.Stream, req *http.Request) {
-	stream.SetWriteDeadline(time.Now().Add(10 * time.Second))
-
-	// Parse TTL from request body
-	var body struct {
-		TTLHours int `json:"ttl_hours"`
-	}
-	if b, err := io.ReadAll(req.Body); err == nil {
-		json.Unmarshal(b, &body)
-	}
-	ttl := time.Duration(body.TTLHours) * time.Hour
-	if ttl <= 0 {
-		ttl = 1 * time.Hour
-	}
-	if ttl > 24*time.Hour {
-		ttl = 24 * time.Hour
-	}
-
-	// Kick off snapshot creation fully async. Hashing happens inside the
-	// syncMgr goroutine — the handler must return fast so the broker's
-	// 30s stream read deadline isn't hit on large WorkDirs. Process list
-	// used to come from PID-file scans (engine-runner era); with docker
-	// containers IANN no longer tracks PIDs, so an empty slice is fed in.
-	listProcs := func() ([]ProcessInfo, error) {
-		return nil, nil
-	}
-	if err := p.syncMgr.StartCreateSnapshot(p.InstallClient.WorkDir, p.NodeIdentity.Address, listProcs, ttl); err != nil {
-		msg, _ := json.Marshal(map[string]string{"error": err.Error()})
-		writeHTTPResponse(stream, 409, "application/json", msg)
-		return
-	}
-
-	resp, _ := json.Marshal(map[string]string{"status": "creating"})
-	writeHTTPResponse(stream, 202, "application/json", resp)
-}
-
-// handleSyncStatus returns current snapshot creation status.
-func (p *Provider) handleSyncStatus(stream quic.Stream, req *http.Request) {
-	stream.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	status := p.syncMgr.Status(p.InstallClient.WorkDir)
-	// Annotate with this node's peer identity + rendezvous coordinate for the
-	// sync-status UI. The peer ID includes a "S:" prefix for providers (see
-	// rendezvous.go:225).
-	status["node_id"] = "S:" + p.NodeIdentity.Address
-	p.CfgMu.RLock()
-	status["rendezvous_addr"] = p.Cfg.OutboundGateway.RendezvousHostPort()
-	p.CfgMu.RUnlock()
-	data, _ := json.Marshal(status)
-	writeHTTPResponse(stream, 200, "application/json", data)
-}
-
-// handleSyncSnapshot returns the cached snapshot for a valid token.
-func (p *Provider) handleSyncSnapshot(stream quic.Stream, req *http.Request) {
-	stream.SetWriteDeadline(time.Now().Add(1 * time.Minute))
-
-	token := extractBearerToken(req)
-	if token == "" {
-		writeHTTPResponse(stream, 401, "application/json", []byte(`{"error":"authorization required"}`))
-		return
-	}
-
-	snap, err := p.syncMgr.GetSnapshot(p.InstallClient.WorkDir, token)
-	if err != nil {
-		msg, _ := json.Marshal(map[string]string{"error": err.Error()})
-		writeHTTPResponse(stream, 401, "application/json", msg)
-		return
-	}
-
-	data, _ := json.Marshal(snap)
-	writeHTTPResponse(stream, 200, "application/json", data)
-}
-
-// handleSyncFile serves a single file from WorkDir for sync download.
-func (p *Provider) handleSyncFile(stream quic.Stream, req *http.Request) {
-	token := extractBearerToken(req)
-	if token == "" {
-		writeHTTPResponse(stream, 401, "application/json", []byte(`{"error":"authorization required"}`))
-		return
-	}
-
-	_, err := p.syncMgr.GetSnapshot(p.InstallClient.WorkDir, token)
-	if err != nil {
-		msg, _ := json.Marshal(map[string]string{"error": err.Error()})
-		writeHTTPResponse(stream, 401, "application/json", msg)
-		return
-	}
-
-	relPath := req.URL.Query().Get("path")
-	if relPath == "" {
-		writeHTTPResponse(stream, 400, "application/json", []byte(`{"error":"path required"}`))
-		return
-	}
-
-	workDir := p.InstallClient.WorkDir
-	absPath := filepath.Clean(filepath.Join(workDir, relPath))
-
-	// Path traversal protection
-	if !strings.HasPrefix(absPath, filepath.Clean(workDir)) {
-		writeHTTPResponse(stream, 403, "application/json", []byte(`{"error":"access denied"}`))
-		return
-	}
-
-	f, err := os.Open(absPath)
-	if err != nil {
-		msg, _ := json.Marshal(map[string]string{"error": "file not found"})
-		writeHTTPResponse(stream, 404, "application/json", msg)
-		return
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		writeHTTPResponse(stream, 500, "application/json", []byte(`{"error":"stat failed"}`))
-		return
-	}
-
-	// Stream the file with chunked-style writing
-	stream.SetWriteDeadline(time.Now().Add(30 * time.Minute)) // large files
-	fmt.Fprintf(stream, "HTTP/1.1 200 OK\r\n")
-	fmt.Fprintf(stream, "Content-Type: application/octet-stream\r\n")
-	fmt.Fprintf(stream, "Content-Length: %d\r\n", info.Size())
-	fmt.Fprintf(stream, "\r\n")
-	io.Copy(stream, f)
-}
-
-// extractBearerToken extracts the token from "Authorization: Bearer <token>" header.
-func extractBearerToken(req *http.Request) string {
-	auth := req.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
-	}
-	return ""
 }
