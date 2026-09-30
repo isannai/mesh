@@ -34,13 +34,19 @@ func (p *Provider) initStaticHardware() {
 // no real route — that wrong LAN candidate then got gossiped to peers and broke
 // same-LAN dials (provider nodes advertised 172.25.224.1, unreachable by peers).
 //
+// Only a listen address naming a specific LAN interface is advertised as it is.
+// An unspecified host (":8090", "0.0.0.0:8090") and a LOOPBACK one
+// ("127.0.0.1:8090", the default since SEC-05: station answers isannd on this
+// host only) both resolve to the host's real LAN IP. Advertising loopback would
+// tell a peer on the same LAN to dial 127.0.0.1, which to that peer is itself.
+//
 // NOTE: broker/rendezvous.go carries an identical copy — keep the two in sync.
 func getLANAddr(listenAddr string) string {
 	host, port, err := net.SplitHostPort(listenAddr)
 	if err != nil {
 		return ""
 	}
-	if host != "" && host != "0.0.0.0" {
+	if ip := net.ParseIP(host); host != "" && host != "localhost" && (ip == nil || !(ip.IsUnspecified() || ip.IsLoopback())) {
 		return listenAddr
 	}
 	// Primary: route-aware source IP via a UDP dial to a public addr (no

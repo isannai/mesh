@@ -1,5 +1,5 @@
 {
-  "listen_addr": ":8090",
+  "listen_addr": "127.0.0.1:8090",
   "outbound_gateway": {
     "node_bridge_addr": "http://127.0.0.1:8443",
     "rv_control_addr":  "127.0.0.1:19100"
