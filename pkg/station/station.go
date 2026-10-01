@@ -232,12 +232,11 @@ func (p *Provider) Run(ctx context.Context) error {
 	if p.jobsHandler != nil {
 		p.jobsHandler.Register(httpMux)
 	}
-	// /provider/*, /installer/*, /service/* — share routing with the QUIC
-	// stream path via a bufStream adapter that captures the raw HTTP/1.1
-	// response and replays it onto the HTTP ResponseWriter.
+	// /provider/* — the read-only routes (stream.go), through a bufStream
+	// adapter that captures the raw HTTP/1.1 response and replays it onto the
+	// HTTP ResponseWriter. /installer/* and /service/* had no handler left and
+	// are no longer mounted (SEC-16).
 	httpMux.HandleFunc("/provider/", p.HandleProviderHTTP)
-	httpMux.HandleFunc("/installer/", p.HandleProviderHTTP)
-	httpMux.HandleFunc("/service/", p.HandleProviderHTTP)
 	httpMux.HandleFunc("/svc/", p.HandleServiceProxy)
 	// Auto-wire reload — isannd POSTs here after docker create/start/restart so a
 	// newly-installed engine is served without restarting station.
@@ -309,9 +308,8 @@ func (b *bufStream) Context() context.Context           { return context.Backgro
 func (b *bufStream) SetWriteDeadline(_ time.Time) error { return nil }
 func (b *bufStream) SetDeadline(_ time.Time) error      { return nil }
 
-// HandleProviderHTTP is the HTTP-path mount for /provider/* and
-// /installer/* — paths that historically only served on the QUIC
-// orchestrator stream. We feed the request through the shared dispatcher
+// HandleProviderHTTP is the HTTP-path mount for /provider/* — paths that
+// historically only served on the QUIC orchestrator stream. We feed the request through the shared dispatcher
 // using a bufStream adapter and replay the captured raw HTTP/1.1 response
 // onto the real ResponseWriter. Keeps a single source of truth for the
 // routing switch in stream.go.
