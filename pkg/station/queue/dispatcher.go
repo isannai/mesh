@@ -120,6 +120,9 @@ func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFun
 			return 0, "", nil, err
 		}
 		for k, vs := range job.RequestHeader {
+			if !EngineHeader(k) {
+				continue
+			}
 			for _, v := range vs {
 				req.Header.Add(k, v)
 			}
@@ -526,4 +529,24 @@ func parseSSEData(line string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(strings.TrimPrefix(line, "data:")), true
+}
+
+// EngineHeader reports whether a header the caller sent may go on to the
+// engine.
+//
+// 🔴 THE CALLER'S CREDENTIALS STOP AT THE STATION (SEC-17). Authorization with
+// X-ISANN-Message is the caller's inference signature, and X-ISANN-Credential
+// is a protected node's entry token, which works for whoever holds it. The
+// station reads them (whose job it is) after isannd checked them; the engine
+// needs none of them, and it is a third-party image that may log what it
+// receives. Hop-by-hop headers do not cross a proxy either.
+func EngineHeader(key string) bool {
+	switch k := http.CanonicalHeaderKey(key); {
+	case k == "Authorization", k == "Proxy-Authorization",
+		k == "Connection", k == "Keep-Alive", k == "Transfer-Encoding", k == "Upgrade":
+		return false
+	case strings.HasPrefix(k, "X-Isann-"):
+		return false
+	}
+	return true
 }

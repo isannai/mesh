@@ -560,7 +560,7 @@ func (p *Provider) HandleServiceProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k, vv := range r.Header {
-		if k == "Connection" || k == "Keep-Alive" || k == "Transfer-Encoding" || k == "Upgrade" {
+		if !queue.EngineHeader(k) { // no caller credentials to the engine (SEC-17)
 			continue
 		}
 		for _, v := range vv {
