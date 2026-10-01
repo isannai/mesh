@@ -59,20 +59,6 @@ func (p *Provider) tickServiceWatcher(probeCache map[string]probeEntry) {
 
 	observed := map[string]bool{}
 	for _, svc := range svcs {
-		if !svc.IsEnabled() {
-			// Disabled — auto-stop the docker container if it's still up.
-			// dockerStop is idempotent (no-op if not running) so we can fire
-			// unconditionally without an extra ps lookup.
-			if svc.IsManagedLocally() {
-				svcCopy := svc
-				go func(svc setup.ServiceEntry) {
-					if err := p.dockerStop(svc); err != nil {
-						p.Log.Log(glog.Debug, "[station] auto-stop on disable: %s: %v", svc.Name, err)
-					}
-				}(svcCopy)
-			}
-			continue
-		}
 		observed[svc.Name] = true
 
 		// Gate the actual HTTP probe by the manifest's ready_check.interval_ms.

@@ -59,8 +59,8 @@ func ResolveServices(installRoot string, override []setup.ServiceEntry) ([]setup
 
 // MergeServices overlays operator `override` entries onto the auto-`derived`
 // base. Match is by Engine (then Name); a matching override overlays only its
-// SET fields (Name/Addr non-empty, Enable/Queue non-nil) so `{engine, enable:
-// false}` disables an engine without restating its addr. An override with no
+// SET fields (Name/Addr non-empty, Queue non-nil) so `{engine, queue: …}`
+// tunes an engine without restating its addr. An override with no
 // match is appended (e.g. an external, non-apps service the operator added).
 func MergeServices(derived, override []setup.ServiceEntry) []setup.ServiceEntry {
 	out := append([]setup.ServiceEntry(nil), derived...)
@@ -86,9 +86,6 @@ func MergeServices(derived, override []setup.ServiceEntry) []setup.ServiceEntry 
 		}
 		if o.Type != "" {
 			out[i].Type = o.Type
-		}
-		if o.Enable != nil {
-			out[i].Enable = o.Enable
 		}
 		if o.Queue != nil {
 			out[i].Queue = o.Queue
@@ -213,9 +210,6 @@ func serviceFor(folder, dir, composePath string, m *manifest.Manifest) (setup.Se
 
 	se := setup.ServiceEntry{Name: name, Addr: addr, Engine: engine}
 	if st != nil {
-		if st.Enable != nil {
-			se.Enable = st.Enable
-		}
 		if st.Queue != nil {
 			se.Queue = &setup.QueueOverride{
 				MaxQueue:    st.Queue.MaxQueue,

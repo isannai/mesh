@@ -285,15 +285,14 @@ func HashHardware(hw *HardwareSpec) string {
 //     manage its lifecycle. Future engine-specific types (e.g. "ollama",
 //     "tgi") would follow the same pattern with their own poll adapter.
 //
-// Enable is a *bool so the default (field omitted) means enabled. Set
-// "enable": false to turn an entry off without deleting it — useful when
-// you want to temporarily disable a backend.
+// There is no on/off switch here (BUG-01): an engine runs while its container
+// runs, and the operator starts and stops it with isann. The station never
+// starts or stops one.
 type ServiceEntry struct {
 	Name   string `json:"name"`             // "sd-api" | "llm-api" | "llm-xl-api" | any
 	Addr   string `json:"addr"`             // "localhost:7860" or "192.168.1.50:8000"
 	Type   string `json:"type,omitempty"`   // "" (local, default) | "vllm"
 	Engine string `json:"engine,omitempty"` // engine package name → packages/engines/<engine>/manifest.json
-	Enable *bool  `json:"enable,omitempty"` // nil = enabled (default), false = skip
 
 	// Options carries free-form configured options for this service entry —
 	// used by inspect fields with from="service" (e.g. vLLM's quantization
@@ -325,12 +324,6 @@ type QueueOverride struct {
 // false — their lifecycle is driven purely by HTTP reachability.
 func (s ServiceEntry) IsManagedLocally() bool {
 	return s.Type == "" || s.Type == "local"
-}
-
-// IsEnabled reports whether the provider should poll / heartbeat this
-// service. Default (nil) is enabled.
-func (s ServiceEntry) IsEnabled() bool {
-	return s.Enable == nil || *s.Enable
 }
 
 // ServiceInfo holds information about a running service.

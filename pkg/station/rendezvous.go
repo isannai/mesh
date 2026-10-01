@@ -118,17 +118,10 @@ func (p *Provider) buildRegisterMsg() *tunnel.RendezvousMsg {
 	p.CfgMu.RUnlock()
 
 	// Initialize as empty slice (not nil) so the wire format always carries
-	// a `services` field, even when every service is disabled. This lets RV
-	// overwrite its cached list down to empty.
+	// a `services` field, even when there are none. This lets RV overwrite
+	// its cached list down to empty.
 	services := []setup.ServiceInfo{}
 	for _, svc := range svcs {
-		if !svc.IsEnabled() {
-			// Disabled services must NOT appear in the register payload — RV
-			// would otherwise keep showing them in /v1/nodes long after the
-			// owner toggled them off. Heartbeat already honours this; the
-			// register path was the missing piece.
-			continue
-		}
 		info, alive, busy, apiBody := pollServiceWithAPI(svc, p.PackagesDir)
 		if !alive {
 			// Stopped services still need a card on broker UI with a Start
@@ -493,9 +486,6 @@ func (p *Provider) pushAllMetrics(ctx context.Context) {
 	nowMs := time.Now().UnixMilli()
 	batch := make([]tunnel.ServiceMetrics, 0, len(services))
 	for _, svc := range services {
-		if !svc.IsEnabled() {
-			continue
-		}
 		m := p.buildServiceMetric(svc, nowMs)
 		if !metricHasValue(m) {
 			continue

@@ -60,7 +60,6 @@ type Manifest struct {
 type StationSpec struct {
 	ServiceName string        `json:"service_name,omitempty"` // default: "<engine>-api"
 	HostAddr    string        `json:"host_addr,omitempty"`    // default: derived from compose ports
-	Enable      *bool         `json:"enable,omitempty"`       // nil = enabled
 	Queue       *StationQueue `json:"queue,omitempty"`        // default: sensible fallbacks
 }
 
