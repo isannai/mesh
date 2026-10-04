@@ -69,10 +69,11 @@ func TestReadEnvInt_FirstMatchWins(t *testing.T) {
 	}
 }
 
-// writeEngineEnv writes <root>/engines/<engine>/.env with the given body.
+// writeEngineEnv writes <root>/artifacts/addon/engines/<engine>/.env with the
+// given body (the real engine folder, beside manifest.json).
 func writeEngineEnv(t *testing.T, root, engine, body string) {
 	t.Helper()
-	dir := filepath.Join(root, "engines", engine)
+	dir := filepath.Join(root, "artifacts", "addon", "engines", engine)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

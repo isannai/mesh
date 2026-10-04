@@ -26,8 +26,9 @@ import (
 )
 
 // engineEnvConcurrency resolves a service's concurrent-slot count from its
-// engine .env, keyed by the manifest's queue.concurrency_env. The .env lives at
-// <root>/engines/<svc.Engine>/.env — the same file docker compose reads.
+// engine .env, keyed by the manifest's queue.concurrency_env. The .env lives
+// beside the engine manifest, <root>/artifacts/addon/engines/<svc.Engine>/.env —
+// the same file docker compose reads.
 //
 // Returns 0 ("no opinion — defer to the next resolution layer") when: the
 // manifest declares no concurrency_env (engine has no parallel concept, e.g.
@@ -37,7 +38,7 @@ func engineEnvConcurrency(root string, svc setup.ServiceEntry, m *manifest.Manif
 	if m == nil || m.Queue.ConcurrencyEnv == "" || svc.Engine == "" || root == "" {
 		return 0
 	}
-	envPath := filepath.Join(root, "engines", svc.Engine, ".env")
+	envPath := filepath.Join(root, "artifacts", "addon", "engines", svc.Engine, ".env")
 	return readEnvInt(envPath, m.Queue.ConcurrencyEnv)
 }
 
