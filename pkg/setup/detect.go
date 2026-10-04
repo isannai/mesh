@@ -312,11 +312,11 @@ type ServiceEntry struct {
 // SaveToDisk uses *bool because the zero-value of bool (false) is a
 // meaningful setting that needs to be distinguished from "unspecified".
 type QueueOverride struct {
-	MaxQueue    int   `json:"max_queue,omitempty"`     // pending+running 합산 한도, 0 = unlimited
-	Concurrency int   `json:"concurrency,omitempty"`   // 동시 처리 수, 0 = manifest default
-	MaxDone     int   `json:"max_done,omitempty"`      // LRU cap, 0 = manifest default
-	TTLSec      int   `json:"ttl_sec,omitempty"`       // done/failed 보관 시간 (초), 0 = manifest default
-	SaveToDisk  *bool `json:"save_to_disk,omitempty"`  // pointer = 명시 여부 구분 (false vs unset)
+	MaxQueue    int   `json:"max_queue,omitempty"`    // pending+running 합산 한도, 0 = unlimited
+	Concurrency int   `json:"concurrency,omitempty"`  // 동시 처리 수, 0 = manifest default
+	MaxDone     int   `json:"max_done,omitempty"`     // LRU cap, 0 = manifest default
+	TTLSec      int   `json:"ttl_sec,omitempty"`      // done/failed 보관 시간 (초), 0 = manifest default
+	SaveToDisk  *bool `json:"save_to_disk,omitempty"` // pointer = 명시 여부 구분 (false vs unset)
 }
 
 // IsManagedLocally reports whether IANN's installer spawned this service
@@ -337,30 +337,30 @@ func (s ServiceEntry) IsManagedLocally() bool {
 // All volatile fields use omitempty so they disappear cleanly from any
 // JSON path that does not opt into them.
 type ServiceInfo struct {
-	Name             string `json:"name"`
-	Type             string `json:"type,omitempty"` // "" = local, "vllm" = external vLLM, etc.
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"` // "" = local, "vllm" = external vLLM, etc.
 	// Engine carries svc.Engine (engine package name — "sd", "vllm", "llama")
 	// from the operator's conf into the register frame. isannd's nlb_listener
 	// uses it as the key to look up `.isann/engine-state/<engine>.json` and
 	// inject Model / ModelHash / ModelOriginURL on the forward path. Provider
 	// itself doesn't compute the hash — it just labels which engine this svc
 	// belongs to.
-	Engine           string `json:"engine,omitempty"`
+	Engine string `json:"engine,omitempty"`
 	// Launcher comes straight from the engine manifest's `launcher` field
 	// ("docker" | "external"). Used by broker UI to decide whether a
 	// service exposes Start/Stop controls (docker = yes, external = no).
-	Launcher         string `json:"launcher,omitempty"`
-	Version          string `json:"version,omitempty"`
-	BinHash          string `json:"bin_hash,omitempty"`
-	Model            string `json:"model,omitempty"`
-	ModelHash        string `json:"model_hash,omitempty"`
+	Launcher  string `json:"launcher,omitempty"`
+	Version   string `json:"version,omitempty"`
+	BinHash   string `json:"bin_hash,omitempty"`
+	Model     string `json:"model,omitempty"`
+	ModelHash string `json:"model_hash,omitempty"`
 	// ModelOriginURL is the package.json's downloads[0].download_url —
 	// where this model was fetched from. Empty for file:// imports
 	// (broker UI treats empty as the "imported" placeholder) or when
 	// the package can't be located on disk. Lets cards render
 	// "owner/repo" / "civitai-id" prefixes that round-trip cleanly via
 	// the search bar (HF text search hits owner/repo paths exactly).
-	ModelOriginURL   string `json:"model_origin_url,omitempty"`
+	ModelOriginURL string `json:"model_origin_url,omitempty"`
 	// ModelArch is the architecture family, verbatim from the package.json
 	// `architecture` that `isann model pull --arch` wrote: "sd15" / "sdxl" /
 	// "sd3" / "pony" / "flux". Empty for engines with no arch hierarchy —
@@ -373,17 +373,22 @@ type ServiceInfo struct {
 	// SD 1.5 asked for 1024x1024 does the same in the other direction. The
 	// node then looks wrong for a mistake the caller made. Same reason as
 	// ModelHash — only the host can see the package, so the host says it.
-	ModelArch        string `json:"model_arch,omitempty"`
-	ServerReady      bool   `json:"server_ready,omitempty"`
-	ServerLoading    bool   `json:"server_loading,omitempty"`
-	ChildPID         int    `json:"child_pid,omitempty"`
-	ChildName        string `json:"child_name,omitempty"`
-	QueueDepth       int    `json:"queue_depth,omitempty"`        // volatile — /v1/metrics 전용
-	Progress         int    `json:"progress,omitempty"`           // running job progress 0-100 (0 = idle/unknown)
-	EstimatedWaitSec *int   `json:"estimated_wait_sec,omitempty"` // nil이면 생략
-	LastJobAt        int64  `json:"last_job_at,omitempty"`        // Unix timestamp of last submitted job
-	TotalJobsDone    int    `json:"total_jobs_done,omitempty"`    // volatile — /v1/metrics 전용
-	AvgJobSec        *int   `json:"avg_job_sec,omitempty"`        // nil이면 생략
+	ModelArch string `json:"model_arch,omitempty"`
+	// ModelClass is what the running model is - format, architecture,
+	// quantization, size - read by isannd from its weight headers (see
+	// ModelClass). Absent when the engine is stopped or its model changed
+	// since it started, like ModelHash.
+	ModelClass       *ModelClass `json:"model_class,omitempty"`
+	ServerReady      bool        `json:"server_ready,omitempty"`
+	ServerLoading    bool        `json:"server_loading,omitempty"`
+	ChildPID         int         `json:"child_pid,omitempty"`
+	ChildName        string      `json:"child_name,omitempty"`
+	QueueDepth       int         `json:"queue_depth,omitempty"`        // volatile — /v1/metrics 전용
+	Progress         int         `json:"progress,omitempty"`           // running job progress 0-100 (0 = idle/unknown)
+	EstimatedWaitSec *int        `json:"estimated_wait_sec,omitempty"` // nil이면 생략
+	LastJobAt        int64       `json:"last_job_at,omitempty"`        // Unix timestamp of last submitted job
+	TotalJobsDone    int         `json:"total_jobs_done,omitempty"`    // volatile — /v1/metrics 전용
+	AvgJobSec        *int        `json:"avg_job_sec,omitempty"`        // nil이면 생략
 
 	// Capacity (static): pending+running 한도 + 동시 처리 워커 수. resolveQueue
 	// 결과를 register에서 한 번 보내고 RV가 /v1/nodes로 노출. broker가 이걸로
