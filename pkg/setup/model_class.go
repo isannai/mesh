@@ -1,11 +1,11 @@
 package setup
 
 // ModelClass is what a service's model is, read by the host (isannd) from the
-// weight files of the model running now: format, architecture, quantization
-// and size. It rides on ServiceInfo.ModelClass into the register frame and out
-// of RV's /v1/nodes.
+// weight files of the model running now: format, name, architecture,
+// quantization and size. It rides on ServiceInfo.ModelClass into the register
+// frame and out of RV's /v1/nodes.
 //
-// 🔴 A PEER CANNOT DERIVE THIS FROM Model. The name is whatever the file was
+// 🔴 A PEER CANNOT DERIVE THIS FROM Model. Model is whatever the file was
 // called - the file shipped as "Qwen2.5-1.5B" counts 1.78B parameters, since
 // the 1.5B leaves the embeddings out - and only the host can open the file.
 // It is still the node's own word: nothing here is signed or checked by a
@@ -17,6 +17,13 @@ type ModelClass struct {
 	// pt | pth, whose headers cannot be read without running pickle code -
 	// for those Format is the only field set.
 	Format string `json:"format"`
+	// Name is the name written inside the weight file by whoever made it: GGUF
+	// general.name, or a safetensors file's __metadata__ "modelspec.title"
+	// (most safetensors files carry none). Free text the maker chose - it can
+	// be anything, as a file name can - so it is shown, never trusted. Control
+	// characters are removed and it is cut to 128 bytes. Empty when the file
+	// names nothing.
+	Name string `json:"name,omitempty"`
 	// Arch is the architecture: qwen2 | llama | gemma3 ... (GGUF metadata,
 	// HF config.json model_type) or sd15 | sdxl | sd3 | flux (package.json,
 	// else told apart by tensor names). Empty when unknown.
