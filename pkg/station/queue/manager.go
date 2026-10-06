@@ -26,6 +26,8 @@ type Manager struct {
 
 	mu     sync.RWMutex
 	queues map[string]*Queue
+
+	ids *idSet // every queue's job ids in one set: an id is unique station-wide
 }
 
 // NewManager builds an empty Manager. ctx governs the lifetime of every
@@ -42,6 +44,7 @@ func NewManager(ctx context.Context, factory Factory) *Manager {
 		ctx:     ctx,
 		factory: factory,
 		queues:  make(map[string]*Queue),
+		ids:     newIDSet(),
 	}
 }
 
@@ -73,6 +76,7 @@ func (m *Manager) GetOrCreate(svc setup.ServiceEntry) *Queue {
 		cfg.ServiceName = svc.Name
 	}
 	q := New(cfg)
+	q.ids = m.ids // before anyone can submit: the queue is not in m.queues yet
 	if process != nil {
 		go q.Worker(m.ctx, process)
 	}

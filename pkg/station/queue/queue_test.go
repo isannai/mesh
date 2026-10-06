@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,17 +30,21 @@ func TestSubmitGet(t *testing.T) {
 	}
 }
 
-// TestSubmitReqIDIdempotent — a client-supplied X-ISANN-Request-Id becomes the
-// job id and dedups retries; absent/malformed falls back to a generated id.
-func TestSubmitReqIDIdempotent(t *testing.T) {
-	q := New(Config{ServiceName: "sd-api"})
-	hdr := func(id string) http.Header {
-		h := http.Header{}
-		if id != "" {
-			h.Set("X-ISANN-Request-Id", id)
-		}
-		return h
+// reqIDHeader carries a client-supplied request id (none when id is empty).
+func reqIDHeader(id string) http.Header {
+	h := http.Header{}
+	if id != "" {
+		h.Set("X-ISANN-Request-Id", id)
 	}
+	return h
+}
+
+// TestSubmitReqIDDuplicateRefused: a client-supplied X-ISANN-Request-Id
+// becomes the job id; the same id again is refused (not joined to the existing
+// job) until that job is gone; absent/malformed falls back to a generated id.
+func TestSubmitReqIDDuplicateRefused(t *testing.T) {
+	q := New(Config{ServiceName: "sd-api"})
+	hdr := reqIDHeader
 
 	// supplied req_id becomes the job id
 	j1, err := q.Submit("/v1/x", []byte("a"), hdr("npc-42-turn7"))
@@ -50,13 +55,27 @@ func TestSubmitReqIDIdempotent(t *testing.T) {
 		t.Fatalf("job ID = %q, want supplied req_id", j1.ID)
 	}
 
-	// retry with the SAME req_id returns the SAME job (dedup, no duplicate)
-	j2, err := q.Submit("/v1/x", []byte("a"), hdr("npc-42-turn7"))
-	if err != nil {
-		t.Fatalf("resubmit: %v", err)
+	// the SAME req_id again is refused - same body or not - and the first job
+	// keeps its request
+	for _, body := range []string{"a", "someone else's prompt"} {
+		j2, err := q.Submit("/v1/x", []byte(body), hdr("npc-42-turn7"))
+		if err != ErrDuplicateID || j2 != nil {
+			t.Fatalf("resubmit (%q) = %v, %v; want nil, ErrDuplicateID", body, j2, err)
+		}
 	}
-	if j2 != j1 {
-		t.Fatalf("resubmit created a new job; want dedup to the existing one")
+	if got := q.Get("npc-42-turn7"); got != j1 || string(got.RequestBody) != "a" {
+		t.Fatalf("the first job changed after a refused resubmit")
+	}
+
+	// once the job is gone (DELETE of a finished job) the id is free again
+	q.mu.Lock()
+	j1.Status = StatusDone
+	q.mu.Unlock()
+	if r := q.Delete("npc-42-turn7"); r != DeleteOK {
+		t.Fatalf("delete = %v", r)
+	}
+	if _, err := q.Submit("/v1/x", []byte("b"), hdr("npc-42-turn7")); err != nil {
+		t.Fatalf("submit after delete: %v", err)
 	}
 
 	// no req_id → server-generated id
@@ -289,6 +308,95 @@ func TestStats(t *testing.T) {
 	s := q.Stats()
 	if s.Pending != 2 {
 		t.Errorf("pending = %d", s.Pending)
+	}
+}
+
+// TestSnapshotNeverDoneWithoutAnswer: readers polling jobs while they finish
+// never see "done" without the answer. Reading the live job could catch it
+// between the two writes and send an empty 200.
+func TestSnapshotNeverDoneWithoutAnswer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q := New(Config{ServiceName: "llm-api", Concurrency: 4})
+	var ids []string
+	for i := 0; i < 200; i++ {
+		j, err := q.Submit("/x", nil, http.Header{})
+		if err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		ids = append(ids, j.ID)
+	}
+	go q.Worker(ctx, func(ctx context.Context, j *Job) (int, string, []byte, error) {
+		return 200, "application/json", []byte(`{"answer":"` + j.ID + `"}`), nil
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for left := len(ids); left > 0; {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d jobs still not done", left)
+		}
+		left = 0
+		for _, id := range ids {
+			s := q.Snapshot(id)
+			if s.Status != StatusDone {
+				left++
+				continue
+			}
+			if !strings.Contains(string(s.ResponseBody), id) {
+				t.Fatalf("job %s reads done with answer %q", id, s.ResponseBody)
+			}
+		}
+	}
+}
+
+// TestSubmitWithAndSnapshotCopy: owner, timeout and stream mode are on the job
+// from the start, and a snapshot is a copy that later writes do not reach.
+func TestSubmitWithAndSnapshotCopy(t *testing.T) {
+	q := New(Config{ServiceName: "llm-api"})
+	j, err := q.SubmitWith("/x", nil, http.Header{}, SubmitOptions{
+		Owner: "0xabc", Timeout: 7 * time.Second, Stream: true, ChunkMode: ChunkModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	s := q.Snapshot(j.ID)
+	if s.SubmitterAddress != "0xabc" || s.Timeout != 7*time.Second || !s.Stream || s.ChunkMode != ChunkModeStrict {
+		t.Fatalf("snapshot = owner %q timeout %v stream %v mode %q", s.SubmitterAddress, s.Timeout, s.Stream, s.ChunkMode)
+	}
+
+	j.AppendChunk("first. ")
+	j.setFile("/tmp/x.png", "/outputs/x.png")
+	s = q.Snapshot(j.ID)
+	j.AppendChunk("second. ")
+	if s.ChunkCount() != 1 || s.URL != "/outputs/x.png" || s.ResponseFile != "/tmp/x.png" {
+		t.Fatalf("snapshot chunks %d url %q file %q", s.ChunkCount(), s.URL, s.ResponseFile)
+	}
+	s.AppendChunk("only on the copy")
+	if j.ChunkCount() != 2 {
+		t.Fatalf("live job has %d chunks, want 2 (the copy's write leaked)", j.ChunkCount())
+	}
+	if q.Snapshot("nope") != nil {
+		t.Fatal("snapshot of a missing job is not nil")
+	}
+}
+
+// TestStatsHidesRunningJobID - Stats leaves the node (public /v1/queue/stats,
+// the RV's /v1/metrics, /ping), and an anonymous job's id is what reads its
+// result. A running job shows as "<service>-active", never as its id.
+func TestStatsHidesRunningJobID(t *testing.T) {
+	q := New(Config{ServiceName: "llm-api"})
+	if got := q.Stats().RunningJobID; got != "" {
+		t.Fatalf("idle running_job_id = %q, want empty", got)
+	}
+	job, _ := q.Submit("/x", nil, http.Header{})
+	if q.dequeue() != job {
+		t.Fatal("dequeue did not start the submitted job")
+	}
+	s := q.Stats()
+	if s.RunningJobID == job.ID || strings.Contains(s.RunningJobID, job.ID) {
+		t.Fatalf("running_job_id %q carries the job id %s", s.RunningJobID, job.ID)
+	}
+	if s.RunningJobID != "llm-api-active" || s.Running != 1 {
+		t.Fatalf("running_job_id = %q running = %d, want llm-api-active and 1", s.RunningJobID, s.Running)
 	}
 }
 

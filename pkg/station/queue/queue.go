@@ -63,6 +63,43 @@ type Config struct {
 // count would exceed MaxQueue.
 var ErrQueueFull = fmt.Errorf("queue full")
 
+// ErrDuplicateID is returned by Submit when the client-supplied request id
+// (X-ISANN-Request-Id) already names a job on this station, in any service's
+// queue. The submit is refused, not joined to that job: whoever sent the id
+// first holds it and reads the job by it (GET /v1/jobs/{id}), where the owner
+// check runs. Joining it here handed a stranger the job's answer and made them
+// its owner. The id is free again once the job is evicted (TTL / LRU / DELETE).
+var ErrDuplicateID = errors.New("request id already in use")
+
+// idSet holds every job id live on the station. The Manager gives one set to
+// all its queues, so an id is unique across services: two queues holding the
+// same id made a lookup by id return either job. reserve is the check and the
+// claim in one step, so two submits racing with the same id cannot both win.
+// Leaf lock: taken under q.mu, never the other way round.
+type idSet struct {
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func newIDSet() *idSet { return &idSet{ids: make(map[string]struct{})} }
+
+// reserve claims id; false when it is already taken.
+func (s *idSet) reserve(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, taken := s.ids[id]; taken {
+		return false
+	}
+	s.ids[id] = struct{}{}
+	return true
+}
+
+func (s *idSet) release(id string) {
+	s.mu.Lock()
+	delete(s.ids, id)
+	s.mu.Unlock()
+}
+
 func (c Config) withDefaults() Config {
 	if c.Concurrency <= 0 {
 		c.Concurrency = 1
@@ -114,6 +151,8 @@ type Queue struct {
 	cleanupHook func(*Job) // optional callback when a job is evicted
 	events      *glog.EventWriter
 	onJobChange func(serviceName, event, jobID string, pending, running int)
+
+	ids *idSet // live job ids, shared by every queue of one Manager
 }
 
 // SetCleanupHook installs a callback invoked just before a job is removed
@@ -134,6 +173,7 @@ func New(cfg Config) *Queue {
 		cleanupHook: cfg.CleanupHook,
 		events:      cfg.Events,
 		onJobChange: cfg.OnJobChange,
+		ids:         newIDSet(), // a Manager swaps in its shared set (GetOrCreate)
 	}
 }
 
@@ -172,29 +212,51 @@ func (q *Queue) SubmitStream(path string, body []byte, header http.Header, chunk
 	})
 }
 
+// SubmitOptions are the job fields fixed at submit. They are set before the
+// job enters the queue: set afterwards, outside the queue lock, a worker could
+// read the timeout and a reader the owner half written.
+type SubmitOptions struct {
+	Owner     string        // SubmitterAddress: the signer, "" for an anonymous job
+	Timeout   time.Duration // engine-call bound for this job; 0 = the service default
+	Stream    bool          // sentence-chunk streaming job (see SubmitStream)
+	ChunkMode string        // segmenter mode for Stream; "" = default
+}
+
+// SubmitWith is Submit with the owner, timeout and streaming mode in place
+// before any worker or reader can see the job. The station's submit door uses
+// it; Submit and SubmitStream stay for callers that need none of them.
+func (q *Queue) SubmitWith(path string, body []byte, header http.Header, o SubmitOptions) (*Job, error) {
+	return q.submit(path, body, header, func(j *Job) {
+		j.SubmitterAddress = o.Owner
+		j.Timeout = o.Timeout
+		j.Stream = o.Stream
+		j.ChunkMode = o.ChunkMode
+	})
+}
+
 // submit is the shared core of Submit/SubmitStream. init (nil for plain Submit)
 // runs on the freshly-built job before it enters the pending queue.
 func (q *Queue) submit(path string, body []byte, header http.Header, init func(*Job)) (*Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// req_id (client-supplied idempotency key, X-ISANN-Request-Id). When present
-	// the job is keyed by it, so a retry with the same req_id returns the
-	// existing job instead of running a duplicate — this is what survives a lost
-	// submit-ack / mobile reconnect. Absent or malformed → server-generated id
-	// (legacy behaviour). Dedup is checked BEFORE the capacity gate so a retry
-	// of an accepted job is never rejected as "queue full".
-	id := sanitizeReqID(header.Get("X-ISANN-Request-Id"))
-	if id != "" {
-		if existing, ok := q.jobs[id]; ok {
-			return existing, nil // idempotent: same req_id → same job
-		}
-	} else {
-		id = generateID()
-	}
-
 	if q.cfg.MaxQueue > 0 && len(q.pending)+len(q.running) >= q.cfg.MaxQueue {
 		return nil, ErrQueueFull
+	}
+
+	// req_id (client-supplied, X-ISANN-Request-Id) becomes the job id, so the
+	// client knows the id before the submit answers: after a lost submit-ack /
+	// mobile reconnect it reads the job by that id instead of submitting again.
+	// An id already live on this station is refused (ErrDuplicateID), never
+	// joined. Absent or malformed → server-generated id.
+	id := sanitizeReqID(header.Get("X-ISANN-Request-Id"))
+	if id != "" {
+		if !q.ids.reserve(id) {
+			return nil, ErrDuplicateID
+		}
+	} else {
+		for id = generateID(); !q.ids.reserve(id); id = generateID() {
+		}
 	}
 
 	job := &Job{
@@ -227,12 +289,26 @@ func (q *Queue) submit(path string, body []byte, header http.Header, init func(*
 	return job, nil
 }
 
-// Get returns a snapshot pointer of the job by ID. Callers should treat the
-// result as read-only — do not write fields. Returns nil if not found.
+// Get returns the live job by ID, nil if not found. The worker keeps writing
+// it, so its fields are only safe to read under the queue lock: a reader
+// answering a client uses Snapshot instead.
 func (q *Queue) Get(id string) *Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.jobs[id]
+}
+
+// Snapshot returns a copy of the job taken under the queue lock, nil if not
+// found. The copy never changes, so a reader sees one consistent state: never
+// "done" with the answer not stored yet, which went out as an empty 200 (and
+// the standard API path then deleted the job, losing the answer).
+func (q *Queue) Snapshot(id string) *Job {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if j := q.jobs[id]; j != nil {
+		return j.snapshot()
+	}
+	return nil
 }
 
 // Wait blocks until the job reaches done/failed or ctx is canceled.
@@ -270,10 +346,14 @@ func (q *Queue) Stats() Stats {
 		estWait = int(float64(len(q.pending)) * avg / float64(q.cfg.Concurrency))
 	}
 
+	// running_job_id is a busy flag, never a real job id. Stats goes out through
+	// the provider door's /v1/queue/stats, the heartbeat to the RV's public
+	// /v1/metrics and isannd's unsigned /ping; an anonymous job's result is
+	// readable by whoever holds its id, so a real one here hands it out.
+	// External engines already send the same "<service>-active" (hardware.go).
 	var runningID string
-	for id := range q.running {
-		runningID = id
-		break
+	if len(q.running) > 0 {
+		runningID = q.cfg.ServiceName + "-active"
 	}
 
 	return Stats{
@@ -526,6 +606,7 @@ func (q *Queue) gc() {
 				q.cleanupHook(j)
 			}
 			delete(q.jobs, e.id)
+			q.ids.release(e.id)
 		}
 	}
 
@@ -549,6 +630,7 @@ func (q *Queue) gc() {
 				q.cleanupHook(j)
 			}
 			delete(q.jobs, rest[i].id)
+			q.ids.release(rest[i].id)
 		}
 	}
 }
@@ -580,6 +662,7 @@ func (q *Queue) Delete(id string) DeleteResult {
 		q.cleanupHook(job)
 	}
 	delete(q.jobs, id)
+	q.ids.release(id)
 	return DeleteOK
 }
 

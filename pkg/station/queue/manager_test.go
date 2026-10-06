@@ -215,3 +215,50 @@ func TestManagerNilFactoryFallback(t *testing.T) {
 		t.Errorf("submit failed: %v", err)
 	}
 }
+
+// TestManagerRequestIDUniqueAcrossServices: a job id is unique on the whole
+// station: an id live in one service's queue is refused by another's, since a
+// lookup by id scans every queue and would return either job.
+func TestManagerRequestIDUniqueAcrossServices(t *testing.T) {
+	m, cancel := newTestManager(t)
+	defer cancel()
+	llm := m.GetOrCreate(setup.ServiceEntry{Name: "llm-api"})
+	sd := m.GetOrCreate(setup.ServiceEntry{Name: "sd-api"})
+
+	j, err := llm.Submit("/x", nil, reqIDHeader("a1b2c3d4e5f6"))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if _, err := sd.Submit("/x", nil, reqIDHeader(j.ID)); err != ErrDuplicateID {
+		t.Fatalf("other service with the same id: err = %v, want ErrDuplicateID", err)
+	}
+	// A generated id is in the same set: naming it from another queue is refused too.
+	g, _ := llm.Submit("/x", nil, http.Header{})
+	if _, err := sd.Submit("/x", nil, reqIDHeader(g.ID)); err != ErrDuplicateID {
+		t.Fatalf("generated id reused from another service: err = %v, want ErrDuplicateID", err)
+	}
+}
+
+// TestManagerRequestIDRace: submits racing with one id over several queues:
+// exactly one wins.
+func TestManagerRequestIDRace(t *testing.T) {
+	m, cancel := newTestManager(t)
+	defer cancel()
+	names := []string{"a", "b", "c", "d"}
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			q := m.GetOrCreate(setup.ServiceEntry{Name: names[i%len(names)]})
+			if _, err := q.Submit("/x", nil, reqIDHeader("same-id")); err == nil {
+				wins.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if n := wins.Load(); n != 1 {
+		t.Fatalf("%d submits took the same id, want 1", n)
+	}
+}

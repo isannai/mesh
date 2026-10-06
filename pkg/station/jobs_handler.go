@@ -309,28 +309,38 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stream mode: ensure the engine sees stream:true (so it emits SSE), and
-	// mark the job for sentence-chunk accumulation before it enters the queue.
-	var job *queue.Job
-	if req.Stream {
-		jobBody = ensureStreamFlag(jobBody)
-		job, err = q.SubmitStream(jobPath, jobBody, submitHeader, req.ChunkMode)
-	} else {
-		job, err = q.Submit(jobPath, jobBody, submitHeader)
-	}
-	if job != nil {
-		// Record the wallet-authenticated submitter (empty for anonymous).
-		// Identity is recovered directly from the IANN signature here (M0,
+	// Everything the job carries is fixed before it enters the queue
+	// (SubmitWith), so no worker or reader sees it half set.
+	opts := queue.SubmitOptions{
+		// The wallet-authenticated submitter (empty for anonymous). Identity is
+		// recovered directly from the IANN signature here (M0,
 		// docs/TODO/isann-cli-phase3.md) — the broker-direct CLI path has no
 		// broker to vouch via X-Caller-Address, so the door recovers itself.
-		job.SubmitterAddress = recoverCaller(r)
-		// ?timeout=<sec> also bounds the engine call itself (not just this
-		// handler's wait): on expiry the worker cancels the engine connection
-		// so a stalled call can't wedge the queue. Absent → service default
-		// (docs/bugs/2026-07-30-queue-worker-wedge-on-stream-stall.md).
-		if secs := clampTimeoutSecs(r.URL.Query().Get("timeout")); secs > 0 {
-			job.Timeout = time.Duration(secs) * time.Second
-		}
+		Owner: recoverCaller(r),
+		// Stream mode: the job accumulates sentence chunks (see below for the
+		// engine's stream:true).
+		Stream:    req.Stream,
+		ChunkMode: req.ChunkMode,
+	}
+	// ?timeout=<sec> also bounds the engine call itself (not just this
+	// handler's wait): on expiry the worker cancels the engine connection
+	// so a stalled call can't wedge the queue. Absent → service default
+	// (docs/bugs/2026-07-30-queue-worker-wedge-on-stream-stall.md).
+	if secs := clampTimeoutSecs(r.URL.Query().Get("timeout")); secs > 0 {
+		opts.Timeout = time.Duration(secs) * time.Second
+	}
+	if req.Stream {
+		jobBody = ensureStreamFlag(jobBody) // so the engine emits SSE
+	}
+	job, err := q.SubmitWith(jobPath, jobBody, submitHeader, opts)
+	if err == queue.ErrDuplicateID {
+		// Refused, not joined: the existing job is read by its id, where the
+		// owner check runs (queue.ErrDuplicateID). Nothing of it goes back here.
+		writeJSON(w, http.StatusConflict, errorResponse{
+			Error:  "request_id_in_use",
+			Reason: "X-ISANN-Request-Id names a job already on this node: read it with GET /v1/jobs/{id} (isann infer result <id>), or send a new id for a new job",
+		})
+		return
 	}
 	if err == queue.ErrQueueFull {
 		stats := q.Stats()
@@ -359,6 +369,8 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			waitCtx, cancel = context.WithTimeout(waitCtx, time.Duration(secs)*time.Second)
 			defer cancel()
 		}
+		// The live job is safe to read here: Wait returns after doneCh closes,
+		// and runJob closes it only after the answer is stored.
 		done, werr := q.Wait(waitCtx, job.ID)
 		if werr != nil {
 			writeJSON(w, http.StatusGatewayTimeout, errorResponse{Error: werr.Error()})
@@ -393,11 +405,17 @@ func (h *JobsHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Position moves as workers take jobs: read it from a snapshot. Gone already
+	// (finished and evicted) reads as position 0.
+	position := 0
+	if snap := q.Snapshot(job.ID); snap != nil {
+		position = snap.Position
+	}
 	stats := q.Stats()
 	writeJSON(w, http.StatusAccepted, submitResponse{
 		JobID:      job.ID,
 		Service:    svc.Name,
-		Position:   job.Position,
+		Position:   position,
 		QueueDepth: stats.Pending + stats.Running,
 		QueueMax:   q.MaxQueue(),
 	})
@@ -791,14 +809,16 @@ func (h *JobsHandler) SetServices(svcs []setup.ServiceEntry) {
 	h.svcMu.Unlock()
 }
 
-// lookupJob scans all queues for a job by ID.
+// lookupJob scans all queues for a job by ID and returns a snapshot of it
+// (queue.Snapshot): every door that answers from a job reads one consistent
+// copy, never the live job a worker is still writing.
 func (h *JobsHandler) lookupJob(id string) (*queue.Job, string) {
 	for _, name := range h.mgr.Names() {
 		q := h.mgr.Get(name)
 		if q == nil {
 			continue
 		}
-		if j := q.Get(id); j != nil {
+		if j := q.Snapshot(id); j != nil {
 			return j, name
 		}
 	}

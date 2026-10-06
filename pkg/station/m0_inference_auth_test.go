@@ -13,6 +13,7 @@ package station
 import (
 	"crypto/ecdsa"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -217,4 +218,70 @@ func TestAuthorizeJob_Ownership(t *testing.T) {
 			t.Errorf("anon fetch = %d, want 200", code)
 		}
 	})
+}
+
+// submitStatusFor 는 submitFor 처럼 제출하되, 거절도 관찰하도록 상태코드와 본문을
+// 돌려준다. wait 이면 동기 제출(wait=true)이다.
+func submitStatusFor(t *testing.T, srvURL string, headers map[string]string, wait bool) (int, string) {
+	t.Helper()
+	body, _ := json.Marshal(submitRequest{Service: "sd-api", Params: json.RawMessage(`{"prompt":"another"}`), Wait: wait})
+	req, _ := http.NewRequest(http.MethodPost, srvURL+"/svc/sd-api/v1/jobs", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// TestSubmitWithTakenJobIDRefused: 남의 job id 를 X-ISANN-Request-Id 로 실어
+// 제출하면 그 job 에 붙지 않고 409 로 거절된다. 예전에는 그 job 을 돌려주고
+// 소유자를 제출자로 덮어써서, id 만 알면 서명된 job 의 답을 가져가고 주인을
+// 내쫓을 수 있었다. 거절된 뒤에도 주인은 그대로다.
+func TestSubmitWithTakenJobIDRefused(t *testing.T) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("done"))
+	}))
+	defer engine.Close()
+	_, srv := newTestHandler(t, engine)
+
+	ownerPK, _ := newWallet(t)
+	otherPK, _ := newWallet(t)
+	id := submitFor(t, srv.URL, signedHeaders(t, ownerPK, "submit:1"))
+	taken := map[string]string{"X-ISANN-Request-Id": id}
+
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		wait    bool
+	}{
+		{"anonymous", taken, false},
+		{"anonymous, wait", taken, true},
+		{"another wallet", mergeHeaders(signedHeaders(t, otherPK, "submit:2"), taken), false},
+		{"the owner itself", mergeHeaders(signedHeaders(t, ownerPK, "submit:3"), taken), false},
+	} {
+		code, body := submitStatusFor(t, srv.URL, tc.headers, tc.wait)
+		if code != http.StatusConflict || !strings.Contains(body, "request_id_in_use") {
+			t.Errorf("%s: submit with a taken id = %d %s, want 409 request_id_in_use", tc.name, code, body)
+		}
+		if strings.Contains(body, "done") {
+			t.Errorf("%s: the refusal carries the job's answer: %s", tc.name, body)
+		}
+	}
+
+	// The job still belongs to its owner.
+	if code := statusCodeFor(t, srv.URL, id, signedHeaders(t, ownerPK, "fetch:1")); code != http.StatusOK {
+		t.Errorf("owner fetch = %d, want 200", code)
+	}
+	if code := statusCodeFor(t, srv.URL, id, signedHeaders(t, otherPK, "fetch:2")); code != http.StatusForbidden {
+		t.Errorf("other-wallet fetch = %d, want 403", code)
+	}
+	if code := statusCodeFor(t, srv.URL, id, nil); code != http.StatusForbidden {
+		t.Errorf("anonymous fetch = %d, want 403", code)
+	}
 }

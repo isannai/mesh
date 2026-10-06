@@ -86,9 +86,43 @@ type Job struct {
 	// Streaming jobs treat it as idle (no-chunk) time; buffered as total time.
 	Timeout time.Duration `json:"-"`
 
+	// chunkMu guards chunks and meta, and ResponseFile / URL while the worker
+	// stamps them outside the queue lock (Storage.Save via setFile). Every other
+	// field is the queue's: written and read under its lock (Queue.Snapshot).
 	chunkMu sync.Mutex `json:"-"`
 	chunks  []string   `json:"-"` // completed sentence chunks, in order
 	meta    []byte     `json:"-"` // message-excluded metadata JSON (usage/finish_reason/…), set at stream completion
+}
+
+// setFile records where the result was saved. The worker calls it mid-job,
+// without the queue lock, so it takes chunkMu, which snapshot also takes.
+func (j *Job) setFile(path, url string) {
+	j.chunkMu.Lock()
+	j.ResponseFile, j.URL = path, url
+	j.chunkMu.Unlock()
+}
+
+// snapshot copies the job for a reader. The caller holds the owning queue's
+// lock (Queue.Snapshot), which covers the fields the queue writes; chunkMu
+// covers the rest. A reader that took the live job instead could catch it
+// between "status done" and "answer stored" and send an empty answer.
+// The slices it shares (bodies, headers) are never written after they are set.
+func (j *Job) snapshot() *Job {
+	c := &Job{
+		ID: j.ID, ServiceName: j.ServiceName, Status: j.Status, Position: j.Position,
+		Progress: j.Progress, Step: j.Step, Total: j.Total,
+		SubmitterAddress: j.SubmitterAddress, Error: j.Error,
+		Path: j.Path, RequestBody: j.RequestBody, RequestHeader: j.RequestHeader,
+		ResponseBody: j.ResponseBody, ResponseCode: j.ResponseCode, ResponseType: j.ResponseType,
+		CreatedAt: j.CreatedAt, StartedAt: j.StartedAt, EndedAt: j.EndedAt,
+		doneCh: j.doneCh, Stream: j.Stream, ChunkMode: j.ChunkMode, Timeout: j.Timeout,
+	}
+	j.chunkMu.Lock()
+	c.URL, c.ResponseFile = j.URL, j.ResponseFile
+	c.chunks = append([]string(nil), j.chunks...)
+	c.meta = j.meta
+	j.chunkMu.Unlock()
+	return c
 }
 
 // Done returns a channel closed when the job reaches done/failed.

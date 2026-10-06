@@ -57,8 +57,7 @@ func (s *Storage) Save(job *Job, body []byte, contentType string) (shouldDropBod
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		return false
 	}
-	job.ResponseFile = path
-	job.URL = "/outputs/" + filename
+	job.setFile(path, "/outputs/"+filename) // mid-job, outside the queue lock
 	return true
 }
 
