@@ -87,20 +87,27 @@ The first signature is unchanged either way, so an RV that does not read the
 model fields pays every ticket as before. `pkg/faucet/ticket_ext.go` has the
 format.
 
-The list is not in this folder. The operators register it on chain, in
-OperatorConfig, one entry per model file:
+The list is not in this folder. It is on chain, in the FaucetModelRegistry
+contract: anyone requests a model file, and the operators approve it (M-of-N)
+for a period, or reject or stop it. One registry line is one file for one
+period:
 
 ```
-name   faucet.model.<sha256 of the file, 64 lowercase hex>
-type   uint
-value  the parameter count the faucet pays it by (0 takes it off the list)
+hash     sha256 of the file
+params   the parameter count the faucet pays it by
+startAt  the period, startAt <= t < endAt
+endAt
 ```
 
 The prober asks its own isannd which chain query API it uses (`receipt.api` in
-isannd's conf, shown as `api` on `/internal/api/info`) and reads the entries from
-its `/v1/settings` with each directory refresh. Until the first read succeeds,
-or when the API lists nothing, every ticket is a plain one. A failed read keeps
-the list from the last one.
+isannd's conf, shown as `api` on `/internal/api/info`), then reads the lines in
+their period at the start of the current slot from that API directly
+(`/v1/faucet-models?activeAt=<slot start>`), with each directory refresh. Every
+prober of a slot reads the same list; a line approved or stopped mid-slot
+changes the tickets from the next slot. Until the first read succeeds, or when
+the API lists nothing, every ticket is a plain one. A failed read keeps the list
+from the last one. An isannd older than the `api` field names no API, and its
+prober writes plain tickets only.
 
 The hash is the file's sha256 as the node reports it in the RV directory
 (`model_hash`). The parameter count is the operators' number, not the node's: a

@@ -18,17 +18,24 @@ package probe
 //
 // # WHERE IT COMES FROM
 //
-// The operators register it on chain, in OperatorConfig, one entry per file:
+// The FaucetModelRegistry contract holds it. Anyone requests a model file
+// there; the operators approve it (M-of-N) with a period, or reject or stop
+// it. One registry line is one file for one period:
 //
-//	name   faucet.model.<64 lowercase hex sha256 of the model file>
-//	type   uint
-//	value  the parameter count the faucet pays that file by; 0 removes it
+//	hash     the model file's sha256
+//	params   the parameter count the faucet pays that file by
+//	startAt  the period, startAt <= t < endAt
+//	endAt
 //
-// The chain query API (eventLogger) already serves every OperatorConfig entry
-// at /v1/settings, so nothing new is needed there. The prober asks its own
-// isannd which API it uses (/internal/api/info `api`) and reads the entries
-// from it, so a node switched between local and dev reads the matching
-// deployment without a setting of its own.
+// The chain query API (eventLogger) collects the registry and serves it at
+// /v1/faucet-models. The prober asks for the lines in their period at the
+// start of the current slot (activeAt), so every prober of a slot reads the
+// same list. The chain keeps approved periods of one hash from overlapping,
+// so a hash appears at most once.
+//
+// The prober asks its own isannd which API it uses (/internal/api/info `api`)
+// and reads the list from that API directly, so a node switched between local
+// and dev reads the matching deployment without a setting of its own.
 //
 // 🔴 Not from a config file. The size decides a price later, and a file on the
 // prober would let whoever runs the prober raise it. On chain it changes only
@@ -48,14 +55,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/isannai/mesh/pkg/faucet"
 	"github.com/isannai/mesh/pkg/rvnodes"
 )
-
-// ModelSettingPrefix starts the name of every designated model entry in
-// OperatorConfig. The rest of the name is the file's sha256 in lowercase hex.
-const ModelSettingPrefix = "faucet.model."
 
 // modelPageLimit is the API's largest page.
 const modelPageLimit = 100
@@ -65,15 +69,17 @@ const modelPageLimit = 100
 // broken API, not a long list.
 const modelPagesMax = 100
 
-// settingRow is one /v1/settings row, only the fields read here.
-type settingRow struct {
-	Name  string          `json:"name"`
-	Value json.RawMessage `json:"value"`
+// modelRow is one /v1/faucet-models row, only the fields read here.
+type modelRow struct {
+	ID     int64  `json:"id"`
+	Hash   string `json:"hash"`
+	Params string `json:"params"`
 }
 
-// FetchDesignated reads the designated model list: ticket model → ticket
-// params. An empty map means the API answered and lists nothing.
-func FetchDesignated(isanndURL string, client *http.Client) (map[string]string, error) {
+// FetchDesignated reads the designated model list in its period at unix time
+// at: ticket model → ticket params. An empty map means the API answered and
+// lists nothing.
+func FetchDesignated(isanndURL string, client *http.Client, at int64) (map[string]string, error) {
 	api, err := chainAPIOf(isanndURL, client)
 	if err != nil {
 		return nil, err
@@ -82,31 +88,28 @@ func FetchDesignated(isanndURL string, client *http.Client) (map[string]string, 
 	cursor := ""
 	for page := 0; page < modelPagesMax; page++ {
 		q := url.Values{}
-		q.Set("contract", "OPERATOR_CONFIG")
-		q.Set("namePrefix", ModelSettingPrefix)
+		q.Set("activeAt", strconv.FormatInt(at, 10))
 		q.Set("limit", strconv.Itoa(modelPageLimit))
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
 		var body struct {
-			Data []settingRow `json:"data"`
-			Next *string      `json:"next"`
+			Data []modelRow `json:"data"`
+			Next *string    `json:"next"`
 		}
-		if err := getJSON(client, api+"/v1/settings?"+q.Encode(), &body); err != nil {
+		if err := getJSON(client, api+"/v1/faucet-models?"+q.Encode(), &body); err != nil {
 			return nil, fmt.Errorf("designated models: %w", err)
 		}
 		for _, r := range body.Data {
-			model, params, ok, err := parseModelSetting(r)
+			model, params, err := parseModelRow(r)
 			if err != nil {
-				// One bad entry costs that one file its model fields, not the
-				// whole list. Logged because the entry is on chain and someone
-				// has to go fix it there.
-				log.Printf("[probe] designated models: %s: %v (skipped)", r.Name, err)
+				// One bad line costs that one file its model fields, not the
+				// whole list. Logged because the line is on chain and the
+				// operators have to stop it there.
+				log.Printf("[probe] designated models: id %d: %v (skipped)", r.ID, err)
 				continue
 			}
-			if ok {
-				out[model] = params
-			}
+			out[model] = params
 		}
 		if body.Next == nil || *body.Next == "" {
 			return out, nil
@@ -116,32 +119,23 @@ func FetchDesignated(isanndURL string, client *http.Client) (map[string]string, 
 	return nil, fmt.Errorf("designated models: more than %d pages", modelPagesMax)
 }
 
-// parseModelSetting reads one entry. ok=false is an entry set to 0, which is
-// how a file is taken off the list (an OperatorConfig entry cannot be deleted).
-func parseModelSetting(r settingRow) (model, params string, ok bool, err error) {
-	h := strings.TrimPrefix(r.Name, ModelSettingPrefix)
-	if h == r.Name {
-		return "", "", false, fmt.Errorf("name does not start with %s", ModelSettingPrefix)
+// parseModelRow reads one registry line into the ticket spelling.
+func parseModelRow(r modelRow) (model, params string, err error) {
+	if model, err = faucet.ModelFromReport(r.Hash); err != nil {
+		return "", "", err
 	}
-	if model, err = faucet.ModelFromReport(h); err != nil {
-		return "", "", false, err
-	}
-	// A uint arrives as a decimal string (the API keeps uint256 out of JSON
-	// numbers); a plain number is read too.
-	s := strings.Trim(strings.TrimSpace(string(r.Value)), `"`)
-	count, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return "", "", false, fmt.Errorf("value %s is not a parameter count", r.Value)
-	}
-	if count == 0 {
-		return "", "", false, nil
+	// params arrives as a decimal string (the API keeps uint256 out of JSON
+	// numbers). The registry refuses 0.
+	count, err := strconv.ParseUint(strings.TrimSpace(r.Params), 10, 64)
+	if err != nil || count == 0 {
+		return "", "", fmt.Errorf("params %q is not a parameter count", r.Params)
 	}
 	if count < 1_000_000 {
 		// Below a million the ticket would read "0.000", almost certainly a
-		// count written in billions by mistake.
-		return "", "", false, fmt.Errorf("value %d is not a parameter count", count)
+		// count requested in billions by mistake and approved anyway.
+		return "", "", fmt.Errorf("params %d is not a parameter count", count)
 	}
-	return model, faucet.FormatParams(count), true, nil
+	return model, faucet.FormatParams(count), nil
 }
 
 // chainAPIOf asks the local isannd which chain query API it reads.
@@ -184,11 +178,11 @@ func snippetOf(b []byte) string {
 	return s
 }
 
-// refreshModels re-reads the list. A failed read keeps the previous one: the
-// list changes by vote, rarely, and one flaky poll should not strip the model
-// fields from every ticket until the next.
+// refreshModels re-reads the list for the current slot. A failed read keeps
+// the previous one: the list changes by vote, rarely, and one flaky poll
+// should not strip the model fields from every ticket until the next.
 func (p *Prober) refreshModels() {
-	m, err := FetchDesignated(p.cfg.NodeBridgeAddr, p.http)
+	m, err := FetchDesignated(p.cfg.NodeBridgeAddr, p.http, p.modelsAt(time.Now()))
 	p.modelsMu.Lock()
 	defer p.modelsMu.Unlock()
 	if err != nil {
@@ -200,6 +194,19 @@ func (p *Prober) refreshModels() {
 		return
 	}
 	p.models = m
+}
+
+// modelsAt is the time the list is asked for: the start of the assigned slot,
+// so a line approved or stopped in the middle of a slot changes the tickets
+// from the next slot on, for every prober alike. Without an assignment (only
+// an appointed prober writes tickets, so only a test gets here) it is now.
+//
+// Called from the directory poll, the goroutine that sets p.assign.
+func (p *Prober) modelsAt(now time.Time) int64 {
+	if !p.hasAssign {
+		return now.Unix()
+	}
+	return faucet.SlotStartAt(p.assign.Epoch, p.assign.SlotSec)
 }
 
 // ticketModel returns the model fields a ticket for a shot at svc carries,
