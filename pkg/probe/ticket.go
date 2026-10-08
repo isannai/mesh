@@ -65,10 +65,17 @@ type ticketProof struct {
 
 // issueTicket signs a receipt for one passing check and delivers it.
 //
+// kind names the track the check belongs to (faucet.KindText / KindImage). It
+// is written into the ticket only alongside a designated model (models.go).
+//
+// 🔴 Every passing node gets a ticket. The designated model list never takes
+// one away; it only adds the model fields to the ticket of a node that runs a
+// listed file.
+//
 // Failures are logged and swallowed. A ticket that cannot be written or
 // delivered is lost income for the node, not a reason to stop probing — and the
 // next slot brings another chance.
-func (p *Prober) issueTicket(t Target, at time.Time) {
+func (p *Prober) issueTicket(t Target, at time.Time, kind string) {
 	if !p.hasAssign || p.assign.Stale(at) {
 		return
 	}
@@ -77,6 +84,7 @@ func (p *Prober) issueTicket(t Target, at time.Time) {
 	if gi < 0 {
 		return
 	}
+	model, params := p.ticketModel(t.Service)
 
 	node, err := faucet.ParseAddr(addr)
 	if err != nil {
@@ -97,16 +105,10 @@ func (p *Prober) issueTicket(t Target, at time.Time) {
 		log.Printf("[probe] ticket for %s: own address: %v", short(t.Node.ID), err)
 		return
 	}
-	faucetAddr, err := faucet.ParseAddr(p.cfg.FaucetAddr)
-	if err != nil {
-		// Unset until a contract is deployed. The zero address is the honest
-		// value for "no deployment yet" and keeps the field in the signature
-		// rather than adding it later and breaking every stored ticket.
-		faucetAddr = faucet.Addr{}
-	}
+	chainID, faucetAddr := ticketDeployment(p.assign, p.cfg)
 
 	ticket := faucet.Ticket{
-		ChainID:    p.cfg.ChainID,
+		ChainID:    chainID,
 		FaucetAddr: faucetAddr,
 		Prober:     self,
 		Node:       node,
@@ -116,6 +118,18 @@ func (p *Prober) issueTicket(t Target, at time.Time) {
 	if err := faucet.SignTicket(&ticket, setup.SignWithTPMKey); err != nil {
 		log.Printf("[probe] ticket for %s: %v", short(t.Node.ID), err)
 		return
+	}
+	// The second signature, over the six fields plus the model. Sig above is
+	// unchanged by it, so a rendezvous that has never heard of these fields
+	// still pays the ticket. See pkg/faucet ticket_ext.go.
+	if model != "" {
+		ticket.Kind, ticket.Params, ticket.Model = kind, params, model
+		if err := faucet.SignTicketExt(&ticket, setup.SignWithTPMKey); err != nil {
+			// The plain ticket is already signed and still earns the slot, so
+			// it goes out without the model fields rather than not at all.
+			log.Printf("[probe] ticket for %s: %v (sent without model fields)", short(t.Node.ID), err)
+			ticket.Kind, ticket.Params, ticket.Model, ticket.SigExt = "", "", "", ""
+		}
 	}
 
 	g := p.assign.Groups[gi]
@@ -132,7 +146,38 @@ func (p *Prober) issueTicket(t Target, at time.Time) {
 		log.Printf("[probe] ticket for %s: %v", short(t.Node.ID), err)
 		return
 	}
-	log.Printf("[probe] %s issued a ticket", short(t.Node.ID))
+	if ticket.Params != "" {
+		log.Printf("[probe] %s issued a ticket (designated model, %sB)", short(t.Node.ID), ticket.Params)
+	} else {
+		log.Printf("[probe] %s issued a ticket", short(t.Node.ID))
+	}
+}
+
+// ticketDeployment is the chain id and faucet contract a ticket is signed for.
+//
+// The RV's own pair, from the assignment, whenever it sends one: the RV checks
+// a claim against exactly that pair, and the config keys below were left unset
+// on every prober that ever ran, so every ticket used to say chain 0.
+//
+// An RV older than the field sends zeros, and then the config keeps working the
+// way it always did. Unset there too is zero for both, which the RV still
+// accepts from older probers.
+func ticketDeployment(a Assignment, cfg Config) (uint64, faucet.Addr) {
+	if a.ChainID != 0 {
+		addr, err := faucet.ParseAddr(a.FaucetAddr)
+		if err != nil {
+			addr = faucet.Addr{}
+		}
+		return a.ChainID, addr
+	}
+	addr, err := faucet.ParseAddr(cfg.FaucetAddr)
+	if err != nil {
+		// Unset until a contract is deployed. The zero address is the honest
+		// value for "no deployment yet" and keeps the field in the signature
+		// rather than adding it later and breaking every stored ticket.
+		addr = faucet.Addr{}
+	}
+	return cfg.ChainID, addr
 }
 
 // deliverTicket posts the envelope through this prober's own isannd, the same
@@ -212,7 +257,7 @@ func (p *Prober) issueImageTicket(sh Shot, at time.Time) {
 		log.Printf("[probe] %s image: no longer in the directory — no ticket", short(sh.NodeID))
 		return
 	}
-	p.issueTicket(t, at)
+	p.issueTicket(t, at, faucet.KindImage)
 }
 
 // imageTargetFor finds the current target for a node, for its owner address and

@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/isannai/mesh/pkg/faucet"
 	"github.com/isannai/mesh/pkg/rvnodes"
 )
 
@@ -191,9 +192,10 @@ type Config struct {
 	// stay in the signature from day one rather than being added later, which
 	// would invalidate every ticket already banked.
 	//
-	// 🔴 They must match what the rendezvous is configured with. A ticket
-	// carrying someone else's chain is refused there, which is the point —
-	// otherwise one prober key could mint receipts across deployments.
+	// 🔴 A FALLBACK ONLY. The RV sends its own pair in the slot assignment and
+	// a ticket is signed with that (ticketDeployment); the RV refuses a claim
+	// whose pair is not its own. These are read only when the RV is older than
+	// that field and sends none.
 	ChainID    uint64 `json:"chain_id,omitempty"`
 	FaucetAddr string `json:"faucet_addr,omitempty"`
 	// QueueLowWater is the refill threshold: when a category has fewer than
@@ -490,6 +492,16 @@ type Prober struct {
 	// process, and neither does this node's identity.
 	exclude map[string]bool
 
+	// models is the designated model list as ticket model → ticket params,
+	// read from the chain query API (models.go). nil until the first read
+	// succeeds. Either way every passing node gets a ticket; the list only adds
+	// the model fields to it.
+	//
+	// Behind a mutex because Refresh replaces it while a round's shots, which
+	// run concurrently, read it to write their tickets.
+	modelsMu sync.Mutex
+	models   map[string]string
+
 	// self is this node's address, and signKey the hardware-derived key behind
 	// it. The probe signs with the NODE IDENTITY key, never a wallet key —
 	// design G22: this signature is worth one free inference, not money.
@@ -761,6 +773,10 @@ func (p *Prober) Refresh() {
 	}
 	p.assign, p.hasAssign, p.idleLogged = assign, true, false
 
+	// The designated model list, read with the assignment for the same reason:
+	// only an appointed prober writes tickets, so only it has a use for it.
+	p.refreshModels()
+
 	nodes, err := rvnodes.Fetch(p.cfg.NodeBridgeAddr, true)
 	if err != nil {
 		log.Printf("[probe] %v", err)
@@ -811,8 +827,12 @@ func (p *Prober) Refresh() {
 	} else {
 		p.present = presenceFrom(sightings)
 	}
-	log.Printf("[probe] directory: %d nodes, %d fireable, %d assigned, %d image (epoch %d)",
-		len(nodes), len(fireable), len(p.targets), len(p.imgTargets), p.assign.Epoch)
+	// How many targets run a designated model. Said here because a target off
+	// the list still gets a ticket, just a plain one, so without this count a
+	// list that matches nobody looks exactly like one that matches everybody.
+	designated := p.designatedSummary(p.targets)
+	log.Printf("[probe] directory: %d nodes, %d fireable, %d assigned%s, %d image (epoch %d)",
+		len(nodes), len(fireable), len(p.targets), designated, len(p.imgTargets), p.assign.Epoch)
 	if len(fireable) == 0 && len(nodes) > 1 {
 		// Nothing to do, and the reason is upstream of the faucet entirely: a
 		// node qualifies only with a text service reporting server_ready, and
@@ -1377,7 +1397,7 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 	if verdict == VerdictPass {
 		// Signed and delivered here rather than batched: a ticket is bound to
 		// the slot's root, and the slot can end while a batch waits.
-		p.issueTicket(t, end)
+		p.issueTicket(t, end, faucet.KindText)
 	}
 	switch verdict {
 	case VerdictFail:

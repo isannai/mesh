@@ -72,6 +72,42 @@ measures nothing. (`"fire_at_self": true` turns that off, for a single-machine
 test.) The writers are **not** dropped — arithmetic is generated here, fresh per
 shot, so an allied node still answers something it could not have prepared.
 
+## Designated models
+
+Every node that passes the check gets a ticket. The designated model list only
+decides what the ticket carries:
+
+```
+model on the list   the ticket also carries the track (text), the parameter count
+                    in billions (14.768) and the model hash, under a second TPM signature
+anything else       a plain ticket, as before
+```
+
+The first signature is unchanged either way, so an RV that does not read the
+model fields pays every ticket as before. `pkg/faucet/ticket_ext.go` has the
+format.
+
+The list is not in this folder. The operators register it on chain, in
+OperatorConfig, one entry per model file:
+
+```
+name   faucet.model.<sha256 of the file, 64 lowercase hex>
+type   uint
+value  the parameter count the faucet pays it by (0 takes it off the list)
+```
+
+The prober asks its own isannd which chain query API it uses (`receipt.api` in
+isannd's conf, shown as `api` on `/internal/api/info`) and reads the entries from
+its `/v1/settings` with each directory refresh. Until the first read succeeds,
+or when the API lists nothing, every ticket is a plain one. A failed read keeps
+the list from the last one.
+
+The hash is the file's sha256 as the node reports it in the RV directory
+(`model_hash`). The parameter count is the operators' number, not the node's: a
+mixture-of-experts model can be listed at what it costs to run. List
+single-file models (GGUF) only: a sharded model's `model_hash` covers its index
+file, not the weights.
+
 ## The signing keys
 
 There is no key to configure and no passphrase. Two keys are used, both tied to

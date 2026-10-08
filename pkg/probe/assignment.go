@@ -47,13 +47,20 @@ type AssignGroup struct {
 }
 
 // Assignment is one slot as the RV renders it.
+//
+// ChainID and FaucetAddr are the deployment that RV issues vouchers for. A
+// ticket signs them, and the RV refuses a claim whose pair is not its own, so
+// they are taken from here (ticketDeployment). An RV older than the field sends
+// neither and leaves them zero.
 type Assignment struct {
-	RV      string        `json:"rv"`
-	SlotSec int           `json:"slot_sec"`
-	Epoch   int64         `json:"epoch"`
-	Root    string        `json:"root"`
-	N       int           `json:"n"`
-	Groups  []AssignGroup `json:"groups"`
+	RV         string        `json:"rv"`
+	ChainID    uint64        `json:"chain_id"`
+	FaucetAddr string        `json:"faucet_addr"`
+	SlotSec    int           `json:"slot_sec"`
+	Epoch      int64         `json:"epoch"`
+	Root       string        `json:"root"`
+	N          int           `json:"n"`
+	Groups     []AssignGroup `json:"groups"`
 
 	root faucet.Hash // parsed once, on fetch
 }

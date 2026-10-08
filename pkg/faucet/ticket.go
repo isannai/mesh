@@ -69,6 +69,9 @@ package faucet
 // even shipping the answer would not show the node generated it. That is why
 // the operator chooses the probers, why several of them overlap on the same
 // node, and why the rendezvous takes the MAXIMUM across probers, never a sum.
+//
+// Which model file the node was checked on, and how large it counts as, ride
+// along under a second signature of their own: ticket_ext.go.
 
 import (
 	"encoding/hex"
@@ -103,6 +106,16 @@ type Ticket struct {
 	Owner      Addr   `json:"owner"`
 	Root       Hash   `json:"root"`
 	Sig        string `json:"sig"`
+
+	// The model the ticket was earned with, under a SECOND signature. Not part
+	// of Message(), so Sig means exactly what it always did. See ticket_ext.go.
+	// All four are empty when the node's model is not on the designated list
+	// (or the prober could not read one), and omitted from the JSON then, so
+	// such a ticket is byte-for-byte what it was before these existed.
+	Kind   string `json:"kind,omitempty"`
+	Params string `json:"params,omitempty"`
+	Model  string `json:"model,omitempty"`
+	SigExt string `json:"sig_ext,omitempty"`
 }
 
 // TicketMessage builds the string a prober signs.
