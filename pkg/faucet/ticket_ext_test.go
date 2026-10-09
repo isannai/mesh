@@ -11,6 +11,7 @@ func sampleExtTicket() Ticket {
 	t.Kind = KindText
 	t.Params = "14.768"
 	t.Model = "0x" + strings.Repeat("ab", 32)
+	t.BudgetID = "3"
 	return t
 }
 
@@ -96,6 +97,7 @@ func TestTicketExtCoversEveryField(t *testing.T) {
 		{"kind", func(x *Ticket) { x.Kind = KindImage }},
 		{"params, the size it is paid by", func(x *Ticket) { x.Params = "70.000" }},
 		{"model", func(x *Ticket) { x.Model = "0x" + strings.Repeat("cd", 32) }},
+		{"budget id, which budget pays it", func(x *Ticket) { x.BudgetID = "4" }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tampered := base
@@ -129,6 +131,11 @@ func TestCheckTicketExt(t *testing.T) {
 		{"model without 0x", func(x *Ticket) { x.Model = strings.Repeat("ab", 32) }},
 		{"uppercase model", func(x *Ticket) { x.Model = "0x" + strings.Repeat("AB", 32) }},
 		{"model as reported", func(x *Ticket) { x.Model = "sha256:" + strings.Repeat("ab", 32) }},
+		{"no budget id", func(x *Ticket) { x.BudgetID = "" }},
+		{"zero budget id", func(x *Ticket) { x.BudgetID = "0" }},
+		{"budget id with a leading zero", func(x *Ticket) { x.BudgetID = "03" }},
+		{"budget id not a number", func(x *Ticket) { x.BudgetID = "3a" }},
+		{"budget id with a sign", func(x *Ticket) { x.BudgetID = "+3" }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bad := ok
@@ -144,13 +151,13 @@ func TestTicketExtMessageShape(t *testing.T) {
 	tk := sampleExtTicket()
 	msg := tk.ExtMessage()
 	want := TicketExtPrefix + strings.TrimPrefix(tk.Message(), TicketMessagePrefix) +
-		":text:14.768:0x" + strings.Repeat("ab", 32)
+		":text:14.768:0x" + strings.Repeat("ab", 32) + ":3"
 	if msg != want {
 		t.Fatalf("ext message\n got %s\nwant %s", msg, want)
 	}
-	// prefix + nine fields.
-	if n := strings.Count(msg, ":"); n != 9 {
-		t.Errorf("message has %d separators, want 9: %q", n, msg)
+	// prefix + ten fields.
+	if n := strings.Count(msg, ":"); n != 10 {
+		t.Errorf("message has %d separators, want 10: %q", n, msg)
 	}
 }
 
@@ -161,7 +168,7 @@ func TestTicketJSONWithoutExt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"kind", "params", "model", "sig_ext"} {
+	for _, k := range []string{"kind", "params", "model", "budget_id", "sig_ext"} {
 		if strings.Contains(string(b), `"`+k+`"`) {
 			t.Errorf("%s written on a ticket without the extension: %s", k, b)
 		}

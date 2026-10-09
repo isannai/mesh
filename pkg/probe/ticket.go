@@ -66,11 +66,12 @@ type ticketProof struct {
 // issueTicket signs a receipt for one passing check and delivers it.
 //
 // kind names the track the check belongs to (faucet.KindText / KindImage). It
-// is written into the ticket only alongside a designated model (models.go).
+// is written into the ticket only alongside a model budget (models.go).
 //
-// 🔴 Every passing node gets a ticket. The designated model list never takes
-// one away; it only adds the model fields to the ticket of a node that runs a
-// listed file.
+// 🔴 A passing node gets a ticket while a budget pays for it. A model with a
+// live budget adds the model fields and the budget id to the ticket; any other
+// node gets a plain ticket paid from the system budget. When no budget is live
+// (the system budget has run out) no ticket is written.
 //
 // Failures are logged and swallowed. A ticket that cannot be written or
 // delivered is lost income for the node, not a reason to stop probing — and the
@@ -84,7 +85,10 @@ func (p *Prober) issueTicket(t Target, at time.Time, kind string) {
 	if gi < 0 {
 		return
 	}
-	model, params := p.ticketModel(t.Service)
+	model, params, budgetID, write := p.ticketBudget(t.Service)
+	if !write {
+		return
+	}
 
 	node, err := faucet.ParseAddr(addr)
 	if err != nil {
@@ -119,16 +123,17 @@ func (p *Prober) issueTicket(t Target, at time.Time, kind string) {
 		log.Printf("[probe] ticket for %s: %v", short(t.Node.ID), err)
 		return
 	}
-	// The second signature, over the six fields plus the model. Sig above is
+	// The second signature, over the six fields plus the model and its budget
+	// id. Sig above is
 	// unchanged by it, so a rendezvous that has never heard of these fields
 	// still pays the ticket. See pkg/faucet ticket_ext.go.
 	if model != "" {
-		ticket.Kind, ticket.Params, ticket.Model = kind, params, model
+		ticket.Kind, ticket.Params, ticket.Model, ticket.BudgetID = kind, params, model, budgetID
 		if err := faucet.SignTicketExt(&ticket, setup.SignWithTPMKey); err != nil {
 			// The plain ticket is already signed and still earns the slot, so
 			// it goes out without the model fields rather than not at all.
 			log.Printf("[probe] ticket for %s: %v (sent without model fields)", short(t.Node.ID), err)
-			ticket.Kind, ticket.Params, ticket.Model, ticket.SigExt = "", "", "", ""
+			ticket.Kind, ticket.Params, ticket.Model, ticket.BudgetID, ticket.SigExt = "", "", "", "", ""
 		}
 	}
 
@@ -147,7 +152,7 @@ func (p *Prober) issueTicket(t Target, at time.Time, kind string) {
 		return
 	}
 	if ticket.Params != "" {
-		log.Printf("[probe] %s issued a ticket (designated model, %sB)", short(t.Node.ID), ticket.Params)
+		log.Printf("[probe] %s issued a ticket (budget %s, %sB)", short(t.Node.ID), ticket.BudgetID, ticket.Params)
 	} else {
 		log.Printf("[probe] %s issued a ticket", short(t.Node.ID))
 	}

@@ -492,15 +492,18 @@ type Prober struct {
 	// process, and neither does this node's identity.
 	exclude map[string]bool
 
-	// models is the designated model list as ticket model → ticket params,
-	// read from the chain query API (models.go). nil until the first read
-	// succeeds. Either way every passing node gets a ticket; the list only adds
-	// the model fields to it.
+	// models is the live model budgets as ticket model → budget id and params,
+	// systemBudget the id of the live system budget ("" when none), both read
+	// from the chain query API (models.go). budgetsRead is false until the
+	// first read succeeds; until then every passing node gets a plain ticket.
+	// After it, a node gets a ticket only while a budget pays for it.
 	//
 	// Behind a mutex because Refresh replaces it while a round's shots, which
 	// run concurrently, read it to write their tickets.
-	modelsMu sync.Mutex
-	models   map[string]string
+	modelsMu     sync.Mutex
+	models       map[string]budgetRef
+	systemBudget string
+	budgetsRead  bool
 
 	// self is this node's address, and signKey the hardware-derived key behind
 	// it. The probe signs with the NODE IDENTITY key, never a wallet key —
@@ -773,7 +776,7 @@ func (p *Prober) Refresh() {
 	}
 	p.assign, p.hasAssign, p.idleLogged = assign, true, false
 
-	// The designated model list, read with the assignment for the same reason:
+	// The live budgets, read with the assignment for the same reason:
 	// only an appointed prober writes tickets, so only it has a use for it.
 	p.refreshModels()
 
@@ -830,7 +833,7 @@ func (p *Prober) Refresh() {
 	// How many targets run a designated model. Said here because a target off
 	// the list still gets a ticket, just a plain one, so without this count a
 	// list that matches nobody looks exactly like one that matches everybody.
-	designated := p.designatedSummary(p.targets)
+	designated := p.budgetSummary(p.targets)
 	log.Printf("[probe] directory: %d nodes, %d fireable, %d assigned%s, %d image (epoch %d)",
 		len(nodes), len(fireable), len(p.targets), designated, len(p.imgTargets), p.assign.Epoch)
 	if len(fireable) == 0 && len(nodes) > 1 {

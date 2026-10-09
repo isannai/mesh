@@ -2,7 +2,7 @@ package faucet
 
 // ticket_ext.go: the model a ticket was earned with, under a second signature.
 //
-//	ISANN-TICKET-EXT:<chainId>:<faucetAddr>:<prober>:<node>:<owner>:<root>:<kind>:<params>:<model>
+//	ISANN-TICKET-EXT:<chainId>:<faucetAddr>:<prober>:<node>:<owner>:<root>:<kind>:<params>:<model>:<budgetId>
 //
 // Every node that passes a check gets a ticket. One that runs a model file the
 // operators have designated also gets these fields, so the faucet can later pay
@@ -33,6 +33,10 @@ package faucet
 //	        costs to run, not at its total size.
 //	model   sha256 of the model file, 0x + 64 lowercase hex. The same file
 //	        hash the node reports to the rendezvous directory as model_hash.
+//	budgetId the faucet budget (FaucetBudgets id) the ticket is paid from,
+//	        decimal without leading zeros, at least 1. The prober picks the
+//	        live budget of that model and signs its id, so the rendezvous
+//	        groups tickets by a value the node cannot edit.
 //
 // They travel as strings so the signed bytes are the bytes on the wire.
 // CheckTicketExt refuses every spelling but the canonical one, so two programs
@@ -102,17 +106,17 @@ func ModelFromReport(s string) (string, error) {
 
 // HasExt reports whether the ticket carries any of the extension fields.
 func (t Ticket) HasExt() bool {
-	return t.Kind != "" || t.Params != "" || t.Model != "" || t.SigExt != ""
+	return t.Kind != "" || t.Params != "" || t.Model != "" || t.BudgetID != "" || t.SigExt != ""
 }
 
 // ExtMessage is the string SigExt covers: the six ticket fields, then kind,
-// params and model.
+// params, model and budget id.
 func (t Ticket) ExtMessage() string {
 	return TicketExtPrefix + strings.TrimPrefix(t.Message(), TicketMessagePrefix) +
-		":" + t.Kind + ":" + t.Params + ":" + t.Model
+		":" + t.Kind + ":" + t.Params + ":" + t.Model + ":" + t.BudgetID
 }
 
-// checkExtFields validates kind, params and model in their canonical spelling.
+// checkExtFields validates kind, params, model and budget id in their canonical spelling.
 func checkExtFields(t Ticket) error {
 	if n := len(t.Kind); n == 0 || n > 16 || !isLowerWord(t.Kind) {
 		return fmt.Errorf("ticket: kind %q is not a short lowercase word", t.Kind)
@@ -123,7 +127,19 @@ func checkExtFields(t Ticket) error {
 	if len(t.Model) != 66 || !strings.HasPrefix(t.Model, "0x") || !isLowerHex(t.Model[2:]) {
 		return fmt.Errorf("ticket: model %q is not 0x + 64 lowercase hex", t.Model)
 	}
+	if _, err := ParseBudgetID(t.BudgetID); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ParseBudgetID reads a ticket's budget id: decimal, at least 1, no leading
+// zeros, so one number has one spelling (the signed bytes are the wire bytes).
+func ParseBudgetID(s string) (uint64, error) {
+	if s == "" || len(s) > 18 || s[0] == '0' || !isDigits(s) {
+		return 0, fmt.Errorf("ticket: budget_id %q is not a decimal number from 1", s)
+	}
+	return strconv.ParseUint(s, 10, 64)
 }
 
 // CheckTicketExt checks the extension's shape: none of it, or all of it in
@@ -144,7 +160,7 @@ func CheckTicketExt(t Ticket) error {
 	return nil
 }
 
-// SignTicketExt fills in SigExt. Kind, Params and Model must be set first; the
+// SignTicketExt fills in SigExt. Kind, Params, Model and BudgetID must be set first; the
 // signer is injected for the same reason SignTicket's is.
 func SignTicketExt(t *Ticket, sign func(msg []byte) ([]byte, error)) error {
 	if t == nil {

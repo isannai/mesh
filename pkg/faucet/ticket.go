@@ -109,13 +109,18 @@ type Ticket struct {
 
 	// The model the ticket was earned with, under a SECOND signature. Not part
 	// of Message(), so Sig means exactly what it always did. See ticket_ext.go.
-	// All four are empty when the node's model is not on the designated list
-	// (or the prober could not read one), and omitted from the JSON then, so
-	// such a ticket is byte-for-byte what it was before these existed.
-	Kind   string `json:"kind,omitempty"`
-	Params string `json:"params,omitempty"`
-	Model  string `json:"model,omitempty"`
-	SigExt string `json:"sig_ext,omitempty"`
+	// All five are empty when the node's model has no live budget (or the
+	// prober could not read one), and omitted from the JSON then, so such a
+	// ticket is byte-for-byte what it was before these existed.
+	//
+	// BudgetID is the faucet budget the ticket is paid from, decimal. The prober
+	// signs it so the rendezvous does not have to guess which budget row the
+	// prober read: a budget's period and state change after approval.
+	Kind     string `json:"kind,omitempty"`
+	Params   string `json:"params,omitempty"`
+	Model    string `json:"model,omitempty"`
+	BudgetID string `json:"budget_id,omitempty"`
+	SigExt   string `json:"sig_ext,omitempty"`
 }
 
 // TicketMessage builds the string a prober signs.

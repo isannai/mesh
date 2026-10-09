@@ -1,45 +1,40 @@
 package probe
 
-// models.go: the designated model list, which model files a ticket names and
-// the size each one is paid by.
+// models.go: the live faucet budgets, which budget a ticket is paid from and
+// whether a ticket is written at all.
 //
-// # WHAT THE LIST DOES AND DOES NOT DO
+// # WHAT A BUDGET DOES AND DOES NOT DO
 //
-// It never decides WHETHER a node gets a ticket. Every node that passes the
-// check gets one, as before. The list only decides what the ticket carries:
+// The faucet pays out of budgets. A budget is one line of the FaucetBudgets
+// contract: a period, a total, a value per ticket and, for a model budget, the
+// sha256 of the model file it pays for. A budget with no model (the zero hash)
+// is the system budget that pays any node.
 //
-//	model on the list      the ticket also carries the model hash and the
-//	                       listed size, under a second signature
-//	anything else          a plain ticket, the one every node got before
+//	model has a live budget    the ticket also carries the model hash, the
+//	                           parameter count and the budget id, under a
+//	                           second signature
+//	anything else              a plain ticket; the rendezvous pays it from the
+//	                           system budget
 //
-// What either kind is worth is the rendezvous's decision. Today it pays both
-// the same; the plan is a small base amount for a plain ticket and a price by
-// size for one that names a designated model.
+// A budget that has run out (spent >= total) or ended is not live. Its tickets
+// are not written: a model whose budget ran out falls back to the plain ticket,
+// and when the system budget has run out too, no ticket is written at all.
+// Vouchers already issued are still accepted by the chain; only new tickets stop.
 //
 // # WHERE IT COMES FROM
 //
-// The FaucetModelRegistry contract holds it. Anyone requests a model file
-// there; the operators approve it (M-of-N) with a period, or reject or stop
-// it. One registry line is one file for one period:
-//
-//	hash     the model file's sha256
-//	params   the parameter count the faucet pays that file by
-//	startAt  the period, startAt <= t < endAt
-//	endAt
-//
-// The chain query API (eventLogger) collects the registry and serves it at
-// /v1/faucet-models. The prober asks for the lines in their period at the
-// start of the current slot (activeAt), so every prober of a slot reads the
-// same list. The chain keeps approved periods of one hash from overlapping,
-// so a hash appears at most once.
+// The chain query API (eventLogger) collects the FaucetBudgets contract and
+// serves it at /v1/faucet-budgets. The prober asks for the lines in their
+// period at the start of the current slot (activeAt) that are active and not
+// spent out, so every prober of a slot reads the same list.
 //
 // The prober asks its own isannd which API it uses (/internal/api/info `api`)
 // and reads the list from that API directly, so a node switched between local
 // and dev reads the matching deployment without a setting of its own.
 //
-// 🔴 Not from a config file. The size decides a price later, and a file on the
+// 🔴 Not from a config file. The budget decides a price, and a file on the
 // prober would let whoever runs the prober raise it. On chain it changes only
-// by the operators' M-of-N vote, and anyone can read what it says.
+// by the operators' M-of-N vote or a funder's deposit, and anyone can read it.
 //
 // The model hash in the ticket comes from the directory: the node's own report
 // of the file it loaded, the sha256 `isann model pull` wrote into its
@@ -64,68 +59,107 @@ import (
 // modelPageLimit is the API's largest page.
 const modelPageLimit = 100
 
-// modelPagesMax bounds one fetch. A hundred pages is ten thousand files, far
+// modelPagesMax bounds one fetch. A hundred pages is ten thousand budgets, far
 // past any list an operator would vote through; a cursor that never ends is a
 // broken API, not a long list.
 const modelPagesMax = 100
 
-// modelRow is one /v1/faucet-models row, only the fields read here.
-type modelRow struct {
+// zeroModel is the model of the system budget.
+const zeroModel = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+// budgetRow is one /v1/faucet-budgets row, only the fields read here.
+type budgetRow struct {
 	ID     int64  `json:"id"`
-	Hash   string `json:"hash"`
+	Model  string `json:"model"`
 	Params string `json:"params"`
 }
 
-// FetchDesignated reads the designated model list in its period at unix time
-// at: ticket model → ticket params. An empty map means the API answered and
-// lists nothing.
-func FetchDesignated(isanndURL string, client *http.Client, at int64) (map[string]string, error) {
+// budgetRef is what a ticket needs of a model budget.
+type budgetRef struct {
+	ID     string // budget id, decimal
+	Params string // ticket params, billions with three decimals
+}
+
+// Budgets is the live budget list: model to its budget, and the system budget.
+type Budgets struct {
+	Models map[string]budgetRef
+	// System is the id of the system budget, "" when none is live.
+	System string
+}
+
+// FetchBudgets reads the budgets that are live in the slot starting at unix
+// time at: in their period, active, and not spent out. An empty result means
+// the API answered and lists nothing.
+//
+// When several live budgets share a model, the lowest id wins, so every
+// prober of the slot picks the same one.
+func FetchBudgets(isanndURL string, client *http.Client, at int64) (Budgets, error) {
 	api, err := chainAPIOf(isanndURL, client)
 	if err != nil {
-		return nil, err
+		return Budgets{}, err
 	}
-	out := map[string]string{}
+	out := Budgets{Models: map[string]budgetRef{}}
+	var systemID int64
+	ids := map[string]int64{}
 	cursor := ""
 	for page := 0; page < modelPagesMax; page++ {
 		q := url.Values{}
 		q.Set("activeAt", strconv.FormatInt(at, 10))
+		q.Set("state", "active")
+		q.Set("exhausted", "false")
 		q.Set("limit", strconv.Itoa(modelPageLimit))
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
 		var body struct {
-			Data []modelRow `json:"data"`
-			Next *string    `json:"next"`
+			Data []budgetRow `json:"data"`
+			Next *string     `json:"next"`
 		}
-		if err := getJSON(client, api+"/v1/faucet-models?"+q.Encode(), &body); err != nil {
-			return nil, fmt.Errorf("designated models: %w", err)
+		if err := getJSON(client, api+"/v1/faucet-budgets?"+q.Encode(), &body); err != nil {
+			return Budgets{}, fmt.Errorf("budgets: %w", err)
 		}
 		for _, r := range body.Data {
-			model, params, err := parseModelRow(r)
-			if err != nil {
-				// One bad line costs that one file its model fields, not the
-				// whole list. Logged because the line is on chain and the
-				// operators have to stop it there.
-				log.Printf("[probe] designated models: id %d: %v (skipped)", r.ID, err)
+			if r.ID <= 0 {
 				continue
 			}
-			out[model] = params
+			if strings.EqualFold(strings.TrimSpace(r.Model), zeroModel) {
+				if systemID == 0 || r.ID < systemID {
+					systemID = r.ID
+				}
+				continue
+			}
+			model, params, err := parseBudgetRow(r)
+			if err != nil {
+				// One bad line costs that one model its model fields, not the
+				// whole list. Logged because the line is on chain and the
+				// operators have to fix it there.
+				log.Printf("[probe] budgets: id %d: %v (skipped)", r.ID, err)
+				continue
+			}
+			if prev, ok := ids[model]; ok && prev < r.ID {
+				continue
+			}
+			ids[model] = r.ID
+			out.Models[model] = budgetRef{ID: strconv.FormatInt(r.ID, 10), Params: params}
 		}
 		if body.Next == nil || *body.Next == "" {
+			if systemID != 0 {
+				out.System = strconv.FormatInt(systemID, 10)
+			}
 			return out, nil
 		}
 		cursor = *body.Next
 	}
-	return nil, fmt.Errorf("designated models: more than %d pages", modelPagesMax)
+	return Budgets{}, fmt.Errorf("budgets: more than %d pages", modelPagesMax)
 }
 
-// parseModelRow reads one registry line into the ticket spelling.
-func parseModelRow(r modelRow) (model, params string, err error) {
-	if model, err = faucet.ModelFromReport(r.Hash); err != nil {
+// parseBudgetRow reads one model budget into the ticket spelling.
+func parseBudgetRow(r budgetRow) (model, params string, err error) {
+	if model, err = faucet.ModelFromReport(r.Model); err != nil {
 		return "", "", err
 	}
 	// params arrives as a decimal string (the API keeps uint256 out of JSON
-	// numbers). The registry refuses 0.
+	// numbers).
 	count, err := strconv.ParseUint(strings.TrimSpace(r.Params), 10, 64)
 	if err != nil || count == 0 {
 		return "", "", fmt.Errorf("params %q is not a parameter count", r.Params)
@@ -144,12 +178,12 @@ func chainAPIOf(isanndURL string, client *http.Client) (string, error) {
 		API string `json:"api"`
 	}
 	if err := getJSON(client, strings.TrimRight(isanndURL, "/")+"/internal/api/info", &info); err != nil {
-		return "", fmt.Errorf("designated models: isannd info: %w", err)
+		return "", fmt.Errorf("budgets: isannd info: %w", err)
 	}
 	api := strings.TrimRight(strings.TrimSpace(info.API), "/")
 	if api == "" {
 		// An isannd older than the field, or one with no receipt block.
-		return "", fmt.Errorf("designated models: isannd names no chain API (conf receipt.api)")
+		return "", fmt.Errorf("budgets: isannd names no chain API (conf receipt.api)")
 	}
 	return api, nil
 }
@@ -178,28 +212,32 @@ func snippetOf(b []byte) string {
 	return s
 }
 
-// refreshModels re-reads the list for the current slot. A failed read keeps
-// the previous one: the list changes by vote, rarely, and one flaky poll
-// should not strip the model fields from every ticket until the next.
+// refreshModels re-reads the budgets for the current slot. A failed read keeps
+// the previous ones: budgets change by vote or deposit, rarely, and one flaky
+// poll should not strip the model fields from every ticket until the next.
 func (p *Prober) refreshModels() {
-	m, err := FetchDesignated(p.cfg.NodeBridgeAddr, p.http, p.modelsAt(time.Now()))
+	b, err := FetchBudgets(p.cfg.NodeBridgeAddr, p.http, p.modelsAt(time.Now()))
 	p.modelsMu.Lock()
 	defer p.modelsMu.Unlock()
 	if err != nil {
-		if p.models == nil {
-			log.Printf("[probe] %v; tickets carry no model fields until it can be read", err)
+		if !p.budgetsRead {
+			log.Printf("[probe] %v; tickets are written as plain ones until it can be read", err)
 		} else {
 			log.Printf("[probe] %v; keeping the previous list of %d", err, len(p.models))
 		}
 		return
 	}
-	p.models = m
+	if b.System == "" && p.systemBudget != "" {
+		log.Printf("[probe] no live system budget; plain tickets stop")
+	}
+	p.models, p.systemBudget, p.budgetsRead = b.Models, b.System, true
 }
 
 // modelsAt is the time the list is asked for: the start of the assigned slot,
-// so a line approved or stopped in the middle of a slot changes the tickets
-// from the next slot on, for every prober alike. Without an assignment (only
-// an appointed prober writes tickets, so only a test gets here) it is now.
+// so a budget approved, stopped or spent out in the middle of a slot changes
+// the tickets from the next slot on, for every prober alike. Without an
+// assignment (only an appointed prober writes tickets, so only a test gets
+// here) it is now.
 //
 // Called from the directory poll, the goroutine that sets p.assign.
 func (p *Prober) modelsAt(now time.Time) int64 {
@@ -209,39 +247,42 @@ func (p *Prober) modelsAt(now time.Time) int64 {
 	return faucet.SlotStartAt(p.assign.Epoch, p.assign.SlotSec)
 }
 
-// ticketModel returns the model fields a ticket for a shot at svc carries,
-// or "" for a plain ticket. It never refuses one.
-func (p *Prober) ticketModel(svc rvnodes.Service) (model, params string) {
+// ticketBudget returns the fields a ticket for a shot at svc carries and
+// whether to write one.
+//
+//	model has a live budget    its model, params and budget id; write
+//	otherwise                  plain ticket; write only while a system budget is
+//	                           live
+//	no list read yet           plain ticket; write (the API may just be down)
+func (p *Prober) ticketBudget(svc rvnodes.Service) (model, params, budgetID string, write bool) {
 	p.modelsMu.Lock()
 	defer p.modelsMu.Unlock()
-	if len(p.models) == 0 {
-		return "", ""
+	if !p.budgetsRead {
+		return "", "", "", true
 	}
-	model, err := faucet.ModelFromReport(svc.ModelHash)
-	if err != nil {
-		return "", ""
+	if m, err := faucet.ModelFromReport(svc.ModelHash); err == nil {
+		if ref, ok := p.models[m]; ok {
+			return m, ref.Params, ref.ID, true
+		}
 	}
-	params, ok := p.models[model]
-	if !ok {
-		return "", ""
-	}
-	return model, params
+	return "", "", "", p.systemBudget != ""
 }
 
-// designatedSummary is the directory log's note on the list: how many files
-// it holds and how many targets run one of them. "" before it was ever read.
-func (p *Prober) designatedSummary(targets []Target) string {
+// budgetSummary is the directory log's note on the budgets: how many model
+// budgets are live and how many targets run one of them. "" before it was ever
+// read.
+func (p *Prober) budgetSummary(targets []Target) string {
 	p.modelsMu.Lock()
-	listed, known := len(p.models), p.models != nil
+	listed, known, sys := len(p.models), p.budgetsRead, p.systemBudget != ""
 	p.modelsMu.Unlock()
 	if !known {
 		return ""
 	}
 	n := 0
 	for _, t := range targets {
-		if m, _ := p.ticketModel(t.Service); m != "" {
+		if m, _, _, _ := p.ticketBudget(t.Service); m != "" {
 			n++
 		}
 	}
-	return fmt.Sprintf(", %d on the designated model list (%d listed)", n, listed)
+	return fmt.Sprintf(", %d on a live model budget (%d live, system budget %t)", n, listed, sys)
 }
