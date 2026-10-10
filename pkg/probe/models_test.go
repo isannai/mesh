@@ -18,6 +18,12 @@ var (
 	qwen14    = "sha256:" + qwen14Hex
 )
 
+// qwenSvc is a service running the 14.768B model with the size a node reports. A
+// node that reports no size is not paid as a model (see paramsFit).
+func qwenSvc() rvnodes.Service {
+	return rvnodes.Service{ModelHash: qwen14, ModelClass: &rvnodes.ModelClass{ParamsCore: 14768307200}}
+}
+
 // fakeChain stands in for both the local isannd (/internal/api/info) and the
 // chain query API (/v1/faucet-budgets), on one server. Rows are served two per
 // page so the cursor is exercised.
@@ -99,7 +105,10 @@ func TestFetchBudgets(t *testing.T) {
 	if got.System != "1" {
 		t.Errorf("system budget = %q, want 1", got.System)
 	}
-	want := map[string]budgetRef{"0x" + qwen14Hex: {"2", "14.768"}, "0x" + ab: {"3", "7.615"}}
+	want := map[string]budgetRef{
+		"0x" + qwen14Hex: {"2", "14.768", 14768307200},
+		"0x" + ab:        {"3", "7.615", 7615616512},
+	}
 	if len(got.Models) != len(want) {
 		t.Fatalf("got %v, want %v", got.Models, want)
 	}
@@ -147,7 +156,7 @@ func TestTicketBudget(t *testing.T) {
 	}
 
 	p.refreshModels()
-	m, params, id, write := p.ticketBudget(rvnodes.Service{ModelHash: qwen14})
+	m, params, id, write := p.ticketBudget(qwenSvc())
 	if m != "0x"+qwen14Hex || params != "14.768" || id != "2" || !write {
 		t.Errorf("listed: %q %q %q %v", m, params, id, write)
 	}
@@ -157,7 +166,7 @@ func TestTicketBudget(t *testing.T) {
 			t.Errorf("%q: %q %q %v, want a plain ticket from the system budget", h, m, id, write)
 		}
 	}
-	targets := []Target{{Service: rvnodes.Service{ModelHash: qwen14}}, {Service: rvnodes.Service{}}}
+	targets := []Target{{Service: qwenSvc()}, {Service: rvnodes.Service{}}}
 	if s := p.budgetSummary(targets); s != ", 1 on a live model budget (1 live, system budget true)" {
 		t.Errorf("summary = %q", s)
 	}
@@ -165,7 +174,7 @@ func TestTicketBudget(t *testing.T) {
 	// One failed read keeps the list it had.
 	f.down.Store(true)
 	p.refreshModels()
-	if m, _, _, _ := p.ticketBudget(rvnodes.Service{ModelHash: qwen14}); m == "" {
+	if m, _, _, _ := p.ticketBudget(qwenSvc()); m == "" {
 		t.Error("a failed read dropped the list")
 	}
 }
@@ -182,9 +191,9 @@ func TestTicketBudgetOneModelPerNode(t *testing.T) {
 	p := &Prober{cfg: Config{NodeBridgeAddr: f.srv.URL}, http: f.srv.Client()}
 	p.refreshModels()
 
-	a := rvnodes.Service{Name: "llm-a", ModelHash: qwen14} // budget 2
-	b := rvnodes.Service{Name: "llm-b", ModelHash: other}  // budget 3
-	sd := rvnodes.Service{Name: "sd-api"}                  // no model
+	a := rvnodes.Service{Name: "llm-a", ModelHash: qwen14, ModelClass: &rvnodes.ModelClass{ParamsCore: 14768307200}} // budget 2
+	b := rvnodes.Service{Name: "llm-b", ModelHash: other, ModelClass: &rvnodes.ModelClass{ParamsCore: 7090000000}}   // budget 3
+	sd := rvnodes.Service{Name: "sd-api"}                                                                            // no model
 	for _, order := range [][]rvnodes.Service{{a, b, sd}, {sd, b, a}} {
 		node := rvnodes.Node{Services: order}
 		if _, _, id, write := p.nodeTicketBudget(Target{Node: node, Service: a}); id != "2" || !write {
@@ -209,6 +218,68 @@ func TestTicketBudgetOneModelPerNode(t *testing.T) {
 	}
 }
 
+// 🔴 THE NODE'S REPORTED SIZE MUST FIT THE BUDGET. A hash alone is the node's word
+// for what it runs; the size the node reads off its own weights has to agree with
+// the budget's parameter count, or the service gets no ticket at all (not even a
+// plain one: it claims a budgeted model it does not run, or will not say).
+func TestTicketBudgetNeedsTheSizeToFit(t *testing.T) {
+	f := newFakeChain(t, rowFor(1, zeroHash, "0"), rowFor(2, "0x"+qwen14Hex, "14768307200"))
+	p := &Prober{cfg: Config{NodeBridgeAddr: f.srv.URL}, http: f.srv.Client()}
+	p.refreshModels()
+
+	cases := []struct {
+		name  string
+		class *rvnodes.ModelClass
+		model bool
+	}{
+		{"exact", &rvnodes.ModelClass{ParamsCore: 14768307200}, true},
+		{"5 percent under", &rvnodes.ModelClass{ParamsCore: 14030000000}, true},
+		{"core missing, total fits", &rvnodes.ModelClass{ParamsTotal: 14768307200}, true},
+		{"no class reported", nil, false},
+		{"class without a size", &rvnodes.ModelClass{Quant: "Q4_K_M"}, false},
+		{"a small model under the big hash", &rvnodes.ModelClass{ParamsCore: 1777088000}, false},
+		{"a bigger model under the hash", &rvnodes.ModelClass{ParamsCore: 32000000000}, false},
+	}
+	for _, c := range cases {
+		svc := rvnodes.Service{Name: "llm", ModelHash: qwen14, ModelClass: c.class}
+		m, _, id, write := p.ticketBudget(svc)
+		if c.model && (id != "2" || m == "" || !write) {
+			t.Errorf("%s: id %q model %q write %v, want the model ticket", c.name, id, m, write)
+		}
+		if !c.model && (id != "" || m != "" || write) {
+			t.Errorf("%s: id %q model %q write %v, want no ticket", c.name, id, m, write)
+		}
+	}
+	for _, c := range []*rvnodes.ModelClass{{ParamsCore: 1777088000}, nil} {
+		if note := p.modelMismatch(rvnodes.Service{ModelHash: qwen14, ModelClass: c}); note == "" {
+			t.Errorf("a size that does not fit left no note for the log (class %v)", c)
+		}
+	}
+}
+
+// A service whose size does not fit is not a model service of its node, so it
+// cannot be the one the node is paid for.
+func TestNodeModelSkipsAServiceThatDoesNotFit(t *testing.T) {
+	other := "sha256:" + strings.Repeat("c3", 32)
+	f := newFakeChain(t,
+		rowFor(1, zeroHash, "0"),
+		rowFor(2, "0x"+qwen14Hex, "14768307200"),
+		rowFor(3, "0x"+strings.Repeat("c3", 32), "7090000000"))
+	p := &Prober{cfg: Config{NodeBridgeAddr: f.srv.URL}, http: f.srv.Client()}
+	p.refreshModels()
+
+	liar := rvnodes.Service{Name: "llm-a", ModelHash: qwen14, ModelClass: &rvnodes.ModelClass{ParamsCore: 1777088000}}  // budget 2, wrong size
+	honest := rvnodes.Service{Name: "llm-b", ModelHash: other, ModelClass: &rvnodes.ModelClass{ParamsCore: 7090000000}} // budget 3, fits
+	node := rvnodes.Node{Services: []rvnodes.Service{liar, honest}}
+
+	if _, _, id, write := p.nodeTicketBudget(Target{Node: node, Service: honest}); id != "3" || !write {
+		t.Errorf("the service that fits must carry the ticket: id %q write %v", id, write)
+	}
+	if _, _, _, write := p.nodeTicketBudget(Target{Node: node, Service: liar}); write {
+		t.Error("the service that does not fit wrote a ticket next to the one that does")
+	}
+}
+
 // 🔴 With the system budget spent out no ticket is written for a plain node,
 // and a model whose own budget ran out falls back to that plain ticket (here:
 // no ticket either). A model that still has its budget keeps earning.
@@ -216,7 +287,7 @@ func TestTicketBudgetStopsWhenSpentOut(t *testing.T) {
 	f := newFakeChain(t, rowFor(2, "0x"+qwen14Hex, "14768307200")) // no live system budget
 	p := &Prober{cfg: Config{NodeBridgeAddr: f.srv.URL}, http: f.srv.Client()}
 	p.refreshModels()
-	if _, _, id, write := p.ticketBudget(rvnodes.Service{ModelHash: qwen14}); id != "2" || !write {
+	if _, _, id, write := p.ticketBudget(qwenSvc()); id != "2" || !write {
 		t.Errorf("a model with a live budget stopped: %q %v", id, write)
 	}
 	if _, _, _, write := p.ticketBudget(rvnodes.Service{}); write {

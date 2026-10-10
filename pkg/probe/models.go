@@ -78,6 +78,7 @@ type budgetRow struct {
 type budgetRef struct {
 	ID     string // budget id, decimal
 	Params string // ticket params, billions with three decimals
+	Count  uint64 // the parameter count the budget lists
 }
 
 // Budgets is the live budget list: model to its budget, and the system budget.
@@ -128,7 +129,7 @@ func FetchBudgets(isanndURL string, client *http.Client, at int64) (Budgets, err
 				}
 				continue
 			}
-			model, params, err := parseBudgetRow(r)
+			model, params, count, err := parseBudgetRow(r)
 			if err != nil {
 				// One bad line costs that one model its model fields, not the
 				// whole list. Logged because the line is on chain and the
@@ -140,7 +141,7 @@ func FetchBudgets(isanndURL string, client *http.Client, at int64) (Budgets, err
 				continue
 			}
 			ids[model] = r.ID
-			out.Models[model] = budgetRef{ID: strconv.FormatInt(r.ID, 10), Params: params}
+			out.Models[model] = budgetRef{ID: strconv.FormatInt(r.ID, 10), Params: params, Count: count}
 		}
 		if body.Next == nil || *body.Next == "" {
 			if systemID != 0 {
@@ -154,22 +155,22 @@ func FetchBudgets(isanndURL string, client *http.Client, at int64) (Budgets, err
 }
 
 // parseBudgetRow reads one model budget into the ticket spelling.
-func parseBudgetRow(r budgetRow) (model, params string, err error) {
+func parseBudgetRow(r budgetRow) (model, params string, count uint64, err error) {
 	if model, err = faucet.ModelFromReport(r.Model); err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	// params arrives as a decimal string (the API keeps uint256 out of JSON
 	// numbers).
-	count, err := strconv.ParseUint(strings.TrimSpace(r.Params), 10, 64)
+	count, err = strconv.ParseUint(strings.TrimSpace(r.Params), 10, 64)
 	if err != nil || count == 0 {
-		return "", "", fmt.Errorf("params %q is not a parameter count", r.Params)
+		return "", "", 0, fmt.Errorf("params %q is not a parameter count", r.Params)
 	}
 	if count < 1_000_000 {
 		// Below a million the ticket would read "0.000", almost certainly a
 		// count requested in billions by mistake and approved anyway.
-		return "", "", fmt.Errorf("params %d is not a parameter count", count)
+		return "", "", 0, fmt.Errorf("params %d is not a parameter count", count)
 	}
-	return model, faucet.FormatParams(count), nil
+	return model, faucet.FormatParams(count), count, nil
 }
 
 // chainAPIOf asks the local isannd which chain query API it reads.
@@ -251,6 +252,8 @@ func (p *Prober) modelsAt(now time.Time) int64 {
 // whether to write one.
 //
 //	model has a live budget    its model, params and budget id; write
+//	  but the size does not    no ticket (see paramsFit)
+//	  fit the budget's
 //	otherwise                  plain ticket; write only while a system budget is
 //	                           live
 //	no list read yet           plain ticket; write (the API may just be down)
@@ -260,12 +263,95 @@ func (p *Prober) ticketBudget(svc rvnodes.Service) (model, params, budgetID stri
 	if !p.budgetsRead {
 		return "", "", "", true
 	}
-	if m, err := faucet.ModelFromReport(svc.ModelHash); err == nil {
-		if ref, ok := p.models[m]; ok {
-			return m, ref.Params, ref.ID, true
-		}
+	m, ref, ok, mismatch := p.modelRefLocked(svc)
+	if ok {
+		return m, ref.Params, ref.ID, true
+	}
+	if mismatch {
+		return "", "", "", false
 	}
 	return "", "", "", p.systemBudget != ""
+}
+
+// paramsTolerancePct is how far a node's reported parameter count may be from the
+// budget's. A count typed into a budget by hand is rarely exact, and the same
+// model reads a little differently with its embeddings counted or not, so the
+// check catches a different SIZE of model, not a rounding.
+const paramsTolerancePct = 10
+
+// paramsFit reports whether a node's model is the size a budget lists.
+//
+// The budget lists what the model costs to run, so the node's ParamsCore is the
+// number to compare, ParamsTotal when it reports no core.
+//
+// 🔴 A node that reports no size at all does NOT fit. The size is the only check
+// on the hash, and leaving it out must not be a way round it: such a node (an
+// older isannd, or one that withholds it) earns no ticket for that service until
+// it reports. Not even a plain one: it claims a model with a budget, and a plain
+// ticket would pay it the system budget's rate for work that is not what it says.
+func paramsFit(listed uint64, c *rvnodes.ModelClass) bool {
+	if listed == 0 {
+		return true
+	}
+	if c == nil {
+		return false
+	}
+	got := c.ParamsCore
+	if got == 0 {
+		got = c.ParamsTotal
+	}
+	if got == 0 {
+		return false
+	}
+	diff := got - listed
+	if listed > got {
+		diff = listed - got
+	}
+	return diff*100 <= listed*paramsTolerancePct
+}
+
+// modelRefLocked finds the live model budget a service sits on.
+//
+//	ok        the service's model hash has a live budget and its size fits
+//	mismatch  the hash has a live budget but the node reports another size, or
+//	          none: the service gets no ticket
+//
+// The caller holds modelsMu.
+func (p *Prober) modelRefLocked(svc rvnodes.Service) (model string, ref budgetRef, ok, mismatch bool) {
+	m, err := faucet.ModelFromReport(svc.ModelHash)
+	if err != nil {
+		return "", budgetRef{}, false, false
+	}
+	r, found := p.models[m]
+	if !found {
+		return "", budgetRef{}, false, false
+	}
+	if !paramsFit(r.Count, svc.ModelClass) {
+		return m, r, false, true
+	}
+	return m, r, true, false
+}
+
+// modelMismatch says why a service whose model hash is on a live budget gets no
+// ticket, "" when it does (or its hash is on no budget).
+func (p *Prober) modelMismatch(svc rvnodes.Service) string {
+	p.modelsMu.Lock()
+	defer p.modelsMu.Unlock()
+	_, ref, _, mismatch := p.modelRefLocked(svc)
+	if !mismatch {
+		return ""
+	}
+	var got uint64
+	if c := svc.ModelClass; c != nil {
+		got = c.ParamsCore
+		if got == 0 {
+			got = c.ParamsTotal
+		}
+	}
+	if got == 0 {
+		return fmt.Sprintf("model hash is on budget %s (%d params) but the node reports no size", ref.ID, ref.Count)
+	}
+	return fmt.Sprintf("model hash is on budget %s (%d params) but the node reports %d params", ref.ID, ref.Count, got)
 }
 
 // nodeTicketBudget is ticketBudget for a whole node: a node is paid for ONE
@@ -305,11 +391,7 @@ func (p *Prober) nodeModelLocked(svcs []rvnodes.Service) string {
 		bestID uint64
 	)
 	for _, svc := range svcs {
-		m, err := faucet.ModelFromReport(svc.ModelHash)
-		if err != nil {
-			continue
-		}
-		ref, ok := p.models[m]
+		m, ref, ok, _ := p.modelRefLocked(svc)
 		if !ok {
 			continue
 		}

@@ -85,6 +85,10 @@ func (p *Prober) issueTicket(t Target, at time.Time, kind string) {
 	if gi < 0 {
 		return
 	}
+	if note := p.modelMismatch(t.Service); note != "" {
+		log.Printf("[probe] ticket for %s: %s; no ticket", short(t.Node.ID), note)
+		return
+	}
 	model, params, budgetID, write := p.nodeTicketBudget(t)
 	if !write {
 		return

@@ -97,12 +97,24 @@ type Service struct {
 	// preference: SDXL at 512x512 returns duplicated subjects and broken
 	// anatomy, SD 1.5 at 1024x1024 the same in reverse. Guessing it wrong
 	// fails an honest node for the caller's mistake.
-	ModelArch     string `json:"model_arch,omitempty"`
-	ServerReady   bool   `json:"server_ready,omitempty"`
-	ServerLoading bool   `json:"server_loading,omitempty"`
-	MaxQueue      int    `json:"max_queue,omitempty"`
-	Concurrency   int    `json:"concurrency,omitempty"`
-	QueueDisabled bool   `json:"queue_disabled,omitempty"`
+	ModelArch string `json:"model_arch,omitempty"`
+	// ModelClass is what the node says the model is, read from its weight
+	// headers on the host. The faucet compares its size with the budget's.
+	ModelClass    *ModelClass `json:"model_class,omitempty"`
+	ServerReady   bool        `json:"server_ready,omitempty"`
+	ServerLoading bool        `json:"server_loading,omitempty"`
+	MaxQueue      int         `json:"max_queue,omitempty"`
+	Concurrency   int         `json:"concurrency,omitempty"`
+	QueueDisabled bool        `json:"queue_disabled,omitempty"`
+}
+
+// ModelClass is the part of a node's model_class the prober reads: the parameter
+// count. ParamsCore is what the model costs to run (a mixture-of-experts model's
+// active weights); ParamsTotal is every weight in the file.
+type ModelClass struct {
+	Quant       string `json:"quant,omitempty"`
+	ParamsCore  uint64 `json:"params_core,omitempty"`
+	ParamsTotal uint64 `json:"params_total,omitempty"`
 }
 
 // AuthModePublic is the mode that admits anonymous inference.
