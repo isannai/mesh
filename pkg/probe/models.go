@@ -268,6 +268,62 @@ func (p *Prober) ticketBudget(svc rvnodes.Service) (model, params, budgetID stri
 	return "", "", "", p.systemBudget != ""
 }
 
+// nodeTicketBudget is ticketBudget for a whole node: a node is paid for ONE
+// model, however many it runs.
+//
+// 🔴 A node that serves two models with live budgets would otherwise get a ticket
+// for whichever service passed first, and a different one from each prober. The
+// node keeps one ticket per prober and slot, so which budget paid was luck, and a
+// client that picks among the tickets could take the dearest. Every prober reads
+// the same directory and the same budget list, so they all settle on the same
+// model: the one with the LOWEST budget id. Its service carries the ticket; the
+// node's other services write none, or a plain ticket from another of them could
+// reach the node first and hide it.
+//
+// A node with no model on a live budget is unchanged: any passing service earns
+// the plain ticket.
+func (p *Prober) nodeTicketBudget(t Target) (model, params, budgetID string, write bool) {
+	model, params, budgetID, write = p.ticketBudget(t.Service)
+	if len(t.Node.Services) < 2 {
+		return
+	}
+	p.modelsMu.Lock()
+	chosen := p.nodeModelLocked(t.Node.Services)
+	p.modelsMu.Unlock()
+	if chosen == "" || chosen == model {
+		return
+	}
+	return "", "", "", false
+}
+
+// nodeModelLocked is the model a node is paid for: of its services that sit on a
+// live model budget, the one with the lowest budget id. "" when there is none.
+// The caller holds modelsMu.
+func (p *Prober) nodeModelLocked(svcs []rvnodes.Service) string {
+	var (
+		best   string
+		bestID uint64
+	)
+	for _, svc := range svcs {
+		m, err := faucet.ModelFromReport(svc.ModelHash)
+		if err != nil {
+			continue
+		}
+		ref, ok := p.models[m]
+		if !ok {
+			continue
+		}
+		id, err := strconv.ParseUint(ref.ID, 10, 64)
+		if err != nil {
+			continue
+		}
+		if best == "" || id < bestID {
+			best, bestID = m, id
+		}
+	}
+	return best
+}
+
 // budgetSummary is the directory log's note on the budgets: how many model
 // budgets are live and how many targets run one of them. "" before it was ever
 // read.
@@ -280,7 +336,7 @@ func (p *Prober) budgetSummary(targets []Target) string {
 	}
 	n := 0
 	for _, t := range targets {
-		if m, _, _, _ := p.ticketBudget(t.Service); m != "" {
+		if m, _, _, _ := p.nodeTicketBudget(t); m != "" {
 			n++
 		}
 	}

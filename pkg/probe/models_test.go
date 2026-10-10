@@ -170,6 +170,45 @@ func TestTicketBudget(t *testing.T) {
 	}
 }
 
+// 🔴 A node is paid for ONE model however many it runs: the one with the lowest
+// budget id, whichever order the services are listed in and whichever service the
+// prober happened to check. The node's other services write no ticket at all.
+func TestTicketBudgetOneModelPerNode(t *testing.T) {
+	other := "sha256:" + strings.Repeat("c3", 32)
+	f := newFakeChain(t,
+		rowFor(1, zeroHash, "0"),
+		rowFor(2, "0x"+qwen14Hex, "14768307200"),
+		rowFor(3, "0x"+strings.Repeat("c3", 32), "7090000000"))
+	p := &Prober{cfg: Config{NodeBridgeAddr: f.srv.URL}, http: f.srv.Client()}
+	p.refreshModels()
+
+	a := rvnodes.Service{Name: "llm-a", ModelHash: qwen14} // budget 2
+	b := rvnodes.Service{Name: "llm-b", ModelHash: other}  // budget 3
+	sd := rvnodes.Service{Name: "sd-api"}                  // no model
+	for _, order := range [][]rvnodes.Service{{a, b, sd}, {sd, b, a}} {
+		node := rvnodes.Node{Services: order}
+		if _, _, id, write := p.nodeTicketBudget(Target{Node: node, Service: a}); id != "2" || !write {
+			t.Errorf("the lowest-id model must carry the ticket: id %q write %v", id, write)
+		}
+		for _, svc := range []rvnodes.Service{b, sd} {
+			if _, _, _, write := p.nodeTicketBudget(Target{Node: node, Service: svc}); write {
+				t.Errorf("service %s of a two-model node wrote a ticket", svc.Name)
+			}
+		}
+	}
+
+	// One model on a live budget and nothing else: unchanged, and a service with
+	// no budget of its own still earns the plain ticket on a node without one.
+	solo := rvnodes.Node{Services: []rvnodes.Service{b, sd}}
+	if _, _, id, write := p.nodeTicketBudget(Target{Node: solo, Service: b}); id != "3" || !write {
+		t.Errorf("a one-model node: id %q write %v", id, write)
+	}
+	plain := rvnodes.Node{Services: []rvnodes.Service{sd, {Name: "clip-api"}}}
+	if _, _, id, write := p.nodeTicketBudget(Target{Node: plain, Service: sd}); id != "" || !write {
+		t.Errorf("a node with no model budget: id %q write %v, want a plain ticket", id, write)
+	}
+}
+
 // 🔴 With the system budget spent out no ticket is written for a plain node,
 // and a model whose own budget ran out falls back to that plain ticket (here:
 // no ticket either). A model that still has its budget keeps earning.
