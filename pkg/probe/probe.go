@@ -207,6 +207,10 @@ type Config struct {
 	// eventual "was this node public all day" rule reads them, so it outlives
 	// the 15-day claim window.
 	ObservationDays int `json:"observation_days"`
+	// NoCompare switches the model-identity check off (compare.go): tickets are
+	// issued as soon as a node passes, whatever else runs the same model in its
+	// group. It is an emergency switch, not a setting to leave on.
+	NoCompare bool `json:"no_compare"`
 	// QuestionFanout is how many nodes are asked the SAME question in one
 	// round — always in different /24s (see FireRound).
 	//
@@ -487,6 +491,16 @@ type Prober struct {
 	// is no local fallback for judging, and firing at an image node with no
 	// judge waiting only burns someone else's GPU.
 	validator *Validator
+
+	// cohorts is this slot's model-identity cohorts, by node (compare.go).
+	cohorts map[string]cohortKey
+	// compareAt is the random moment, inside its sampling window, at which each
+	// node is asked in each round; kept for the slot named by compareAtEpoch.
+	compareAt      map[string]time.Duration
+	compareAtEpoch int64
+	// issueFn replaces issueTicket in tests; nil in production.
+	issueFn func(Target, time.Time, string)
+
 	// exclude is the set of node addresses never fired at: this node and its
 	// helpers. Computed once — the config does not change under a running
 	// process, and neither does this node's identity.
@@ -993,6 +1007,16 @@ func (p *Prober) prune(now time.Time) {
 	if _, err := p.store.PruneConsumed(cutoff); err != nil {
 		log.Printf("[probe] prune questions: %v", err)
 	}
+	if n, err := p.store.PruneCompare(cutoff); err != nil {
+		log.Printf("[probe] prune comparisons: %v", err)
+	} else if n > 0 {
+		log.Printf("[probe] pruned %d comparisons", n)
+	}
+	if n, err := p.store.PruneShots(cutoff); err != nil {
+		log.Printf("[probe] prune shots: %v", err)
+	} else if n > 0 {
+		log.Printf("[probe] pruned %d shots", n)
+	}
 }
 
 // FireRound fires this round's share of the day's work.
@@ -1072,6 +1096,11 @@ func (p *Prober) FireRound() {
 		return
 	}
 
+	// The model-identity check (compare.go): judge a sampling round once its
+	// window has closed, then settle the held tickets once both are judged.
+	p.judgeRounds(now)
+	p.settleTickets(now)
+
 	// Counted for THIS SLOT, not this day. The slot is the unit a ticket is
 	// keyed by, so it is also the unit the one-shot rule has to be counted in.
 	counts, err := p.store.ShotCountsInSlot(p.assign.Epoch)
@@ -1105,6 +1134,10 @@ func (p *Prober) FireRound() {
 		}
 		p.fireTextGroups(groups, now, &stats)
 	}
+
+	// The sentence requests of the model-identity check go out in their own two
+	// windows, whatever the quiz is doing (compare.go).
+	p.fireCompare(now)
 
 	p.fireImageRound(now, counts, &stats)
 }
@@ -1217,6 +1250,9 @@ func (p *Prober) collectRound(now time.Time, stats *roundStats) {
 //	across /24s       THE SAME question. Unrelated networks answering the same
 //	                  thing at the same moment is a free cross-check.
 func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, stats *roundStats) {
+	// Cohorts are read by the shots below and written only here, before they go
+	// out; the round waits for them all before it returns.
+	p.cohorts = p.buildCohorts()
 
 	questions := p.takeQuestions(questionsNeeded(groups, p.cfg.QuestionFanout), now)
 	if len(questions) == 0 {
@@ -1396,11 +1432,17 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		fetched.PromptTokens, fetched.CompletionTokens, fetched.Answer, OutcomeAnswered, verdict); err != nil {
 		log.Printf("[probe] complete shot: %v", err)
 	}
-	p.noteTicket(t.Node.ID, verdict, end)
-	if verdict == VerdictPass {
-		// Signed and delivered here rather than batched: a ticket is bound to
-		// the slot's root, and the slot can end while a batch waits.
-		p.issueTicket(t, end, faucet.KindText)
+	if verdict == VerdictPass && p.deferToCompare(t) {
+		// Held: this node runs a model with a budget and shares a group with
+		// others on it, so its ticket waits for their answers (compare.go).
+		// settleCohorts issues it at the end of the slot.
+	} else {
+		p.noteTicket(t.Node.ID, verdict, end)
+		if verdict == VerdictPass {
+			// Signed and delivered here rather than batched: a ticket is bound to
+			// the slot's root, and the slot can end while a batch waits.
+			p.issueTicket(t, end, faucet.KindText)
+		}
 	}
 	switch verdict {
 	case VerdictFail:

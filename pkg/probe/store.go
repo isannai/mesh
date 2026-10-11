@@ -134,6 +134,32 @@ CREATE INDEX IF NOT EXISTS q_unconsumed  ON question(consumed_at, category);
 -- Backs the duplicate check in AddQuestions. Not UNIQUE: a database that
 -- already holds duplicates from before that check must still open.
 CREATE INDEX IF NOT EXISTS q_text        ON question(category, q);
+
+-- The model-identity check (compare.go). Keyed by slot, group, model, node and
+-- round so every group a prober covers is kept apart.
+--
+--   round 1, 2   a node's answer to the group's comparison prompt in that
+--                sampling window. decision is '' until the round is judged,
+--                then win | lose | skip.
+--   round 0      the node's ticket, held after its quiz passed. decision is ''
+--                until the ticket is settled, then win (issued) | lose (refused).
+CREATE TABLE IF NOT EXISTS compare (
+  epoch      INTEGER NOT NULL,
+  group_idx  INTEGER NOT NULL,
+  model_hash TEXT    NOT NULL,
+  node_id    TEXT    NOT NULL,
+  round      INTEGER NOT NULL,
+  service    TEXT    NOT NULL,
+  slash24    TEXT,
+  asked_at   INTEGER NOT NULL,
+  answer_key TEXT    NOT NULL DEFAULT '',  -- the normalised prefix that is compared
+  answer     TEXT,                         -- the answer as it came, for a later look
+  outcome    TEXT    NOT NULL,
+  decision   TEXT    NOT NULL DEFAULT '',
+  PRIMARY KEY (epoch, group_idx, model_hash, node_id, round)
+);
+CREATE INDEX IF NOT EXISTS compare_open ON compare(epoch, round, decision);
+CREATE INDEX IF NOT EXISTS compare_node ON compare(node_id, asked_at);
 `
 
 // addedColumns are columns that arrived after the first release. CREATE TABLE
@@ -605,6 +631,179 @@ func (s *Store) RecordObservations(obs []Observation, at time.Time) error {
 // PruneObservations drops sightings older than cutoff.
 func (s *Store) PruneObservations(cutoff time.Time) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM observation WHERE seen_at < ?`, cutoff.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// PruneShots drops shot history older than cutoff. Nothing reads a shot past the
+// day it was fired, and the answer text is the bulk of the database.
+func (s *Store) PruneShots(cutoff time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM shot WHERE fired_at < ?`, cutoff.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// CompareRow is one row of the model-identity check (compare.go): a node's
+// answer in one sampling round, or (round 0) its ticket held for the check.
+type CompareRow struct {
+	Epoch   int64
+	Group   int
+	Model   string // 0x + 64 hex, the ticket spelling
+	NodeID  string
+	Round   int // 1 or 2 for an answer, 0 for the held ticket
+	Service string
+	Slash24 string
+	AskedAt time.Time
+	Key     string // the normalised prefix that is compared; "" when the node gave no answer
+	Answer  string // as it came, cut to a length worth keeping
+	Outcome string
+	// Decision is "" until the round (or the held ticket) is settled, then
+	// win | lose | skip.
+	Decision string
+}
+
+// RecordCompare stores one row. A second row for the same node, slot, group,
+// model and round is ignored: the first answer stands, so asking again cannot be
+// a way to get a better one.
+func (s *Store) RecordCompare(r CompareRow) error {
+	_, err := s.db.Exec(`
+		INSERT OR IGNORE INTO compare
+		  (epoch, group_idx, model_hash, node_id, round, service, slash24, asked_at, answer_key, answer, outcome)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		r.Epoch, r.Group, r.Model, r.NodeID, r.Round, r.Service, r.Slash24, r.AskedAt.UnixMilli(), r.Key, r.Answer, r.Outcome)
+	return err
+}
+
+// OpenCompare returns the slot's rows of one round that no decision has been
+// written for. Round 0 is the held tickets.
+func (s *Store) OpenCompare(epoch int64, round int) ([]CompareRow, error) {
+	rows, err := s.db.Query(`
+		SELECT epoch, group_idx, model_hash, node_id, round, service, COALESCE(slash24,''),
+		       asked_at, answer_key, COALESCE(answer,''), outcome
+		  FROM compare WHERE epoch = ? AND round = ? AND decision = ''
+		 ORDER BY group_idx, model_hash, node_id`, epoch, round)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CompareRow
+	for rows.Next() {
+		var r CompareRow
+		var at int64
+		if err := rows.Scan(&r.Epoch, &r.Group, &r.Model, &r.NodeID, &r.Round, &r.Service, &r.Slash24,
+			&at, &r.Key, &r.Answer, &r.Outcome); err != nil {
+			return nil, err
+		}
+		r.AskedAt = time.UnixMilli(at)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CompareAsked is the set of nodes already asked in a round of a slot. A node
+// that failed to answer is in it too: there is no second try.
+func (s *Store) CompareAsked(epoch int64, round int) (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT node_id FROM compare WHERE epoch = ? AND round = ?`, epoch, round)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// RoundDecisions are a node's decisions in the slot's two sampling rounds. A
+// round it was not asked in reads "".
+type RoundDecisions struct {
+	Round1, Round2 string
+}
+
+// CompareDecisions returns every node's decision in each round of a slot.
+func (s *Store) CompareDecisions(epoch int64) (map[string]RoundDecisions, error) {
+	rows, err := s.db.Query(`
+		SELECT node_id, round, decision FROM compare
+		 WHERE epoch = ? AND round IN (1, 2)`, epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]RoundDecisions{}
+	for rows.Next() {
+		var id, d string
+		var round int
+		if err := rows.Scan(&id, &round, &d); err != nil {
+			return nil, err
+		}
+		rd := out[id]
+		if round == 1 {
+			rd.Round1 = d
+		} else {
+			rd.Round2 = d
+		}
+		out[id] = rd
+	}
+	return out, rows.Err()
+}
+
+// SetCompareDecision writes one row's decision.
+func (s *Store) SetCompareDecision(r CompareRow, decision string) error {
+	_, err := s.db.Exec(`
+		UPDATE compare SET decision = ?
+		 WHERE epoch = ? AND group_idx = ? AND model_hash = ? AND node_id = ? AND round = ?`,
+		decision, r.Epoch, r.Group, r.Model, r.NodeID, r.Round)
+	return err
+}
+
+// CompareTally is how often a node has been decided one way or the other.
+type CompareTally struct {
+	Win, Lose, Skip int
+}
+
+// CompareStats counts a node's round decisions since the given time, across every
+// slot and group it was compared in. The held tickets (round 0) are not counted:
+// they only repeat what the rounds decided.
+func (s *Store) CompareStats(nodeID string, since time.Time) (CompareTally, error) {
+	var t CompareTally
+	rows, err := s.db.Query(`
+		SELECT decision, COUNT(*) FROM compare
+		 WHERE node_id = ? AND asked_at >= ? AND round > 0 AND decision != ''
+		 GROUP BY decision`, nodeID, since.UnixMilli())
+	if err != nil {
+		return t, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d string
+		var n int
+		if err := rows.Scan(&d, &n); err != nil {
+			return t, err
+		}
+		switch d {
+		case DecisionWin:
+			t.Win = n
+		case DecisionLose:
+			t.Lose = n
+		case DecisionSkip:
+			t.Skip = n
+		}
+	}
+	return t, rows.Err()
+}
+
+// PruneCompare drops comparison history older than cutoff.
+func (s *Store) PruneCompare(cutoff time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM compare WHERE asked_at < ?`, cutoff.UnixMilli())
 	if err != nil {
 		return 0, err
 	}

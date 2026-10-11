@@ -159,6 +159,13 @@ func (f *Firer) RunSchema(nodeID, svc string) (*manifest.RunSpec, error) {
 // declares what it accepts, and sending a key it does not know is at best
 // ignored and at worst rejected. Only the values are ours.
 func buildRun(rs *manifest.RunSpec, q Question) map[string]any {
+	return buildRunPrompt(rs, q.BuildPrompt(), probeMaxTokens)
+}
+
+// buildRunPrompt is buildRun for a prompt that is already written, with its own
+// token cap. The quiz question wraps its text in few-shot examples and wants a
+// one-word answer; the model-identity check (compare.go) wants a sentence.
+func buildRunPrompt(rs *manifest.RunSpec, prompt string, maxTokens int) map[string]any {
 	run := map[string]any{}
 	has := map[string]bool{}
 	for _, p := range rs.Params {
@@ -183,13 +190,13 @@ func buildRun(rs *manifest.RunSpec, q Question) map[string]any {
 	if promptKey == "" {
 		return nil // nothing to put the question in
 	}
-	run[promptKey] = q.BuildPrompt()
+	run[promptKey] = prompt
 
 	// The rest are best-effort: set them when the engine declares them, skip
 	// them otherwise. A missing max_tokens costs measurement quality, not
 	// correctness, so it must not fail the shot.
 	if has["max_tokens"] {
-		run["max_tokens"] = probeMaxTokens
+		run["max_tokens"] = maxTokens
 	}
 	if has["temperature"] {
 		run["temperature"] = probeTemperature
@@ -216,6 +223,22 @@ func (f *Firer) Submit(t Target, q Question) (SubmitResult, error) {
 			fmt.Errorf("service %q declares no prompt parameter", t.Service.Name)
 	}
 
+	return f.SubmitRunProbe(t.Node.ID, t.Service.Name, run, t.Probe)
+}
+
+// SubmitPrompt sends one bare prompt to one node, with the same proof, schema
+// lookup, temperature 0 and 429 handling as a quiz shot. It is how the
+// model-identity check asks (compare.go).
+func (f *Firer) SubmitPrompt(t Target, prompt string, maxTokens int) (SubmitResult, error) {
+	rs, err := f.RunSchema(t.Node.ID, t.Service.Name)
+	if err != nil {
+		return SubmitResult{Outcome: OutcomeRefused}, err
+	}
+	run := buildRunPrompt(rs, prompt, maxTokens)
+	if run == nil {
+		return SubmitResult{Outcome: OutcomeRefused},
+			fmt.Errorf("service %q declares no prompt parameter", t.Service.Name)
+	}
 	return f.SubmitRunProbe(t.Node.ID, t.Service.Name, run, t.Probe)
 }
 
