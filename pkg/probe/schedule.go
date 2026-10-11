@@ -2,17 +2,21 @@ package probe
 
 // schedule.go — when each node's shot is due.
 //
-// ONE SHOT PER SLOT, FIRED INSIDE THE SLOT.
+// ONE TICKET PER SLOT, EARNED INSIDE THE SLOT.
 //
 // The slot is the unit everything downstream is denominated in. A ticket's key
-// is (prober, node, root) and the root changes only at a slot boundary, so two
-// shots inside one slot collapse into a single ticket no matter how well the
-// node answered both. Firing more often than once a slot therefore costs the
-// node work and returns nothing — the extra shots are invisible by the time
-// they become money.
+// is (prober, node, root) and the root changes only at a slot boundary, so
+// however many shots a slot holds they collapse into a single ticket. Firing
+// more than the slot's design calls for therefore costs the node work and
+// returns nothing — the extra shots are invisible by the time they become money.
 //
 // So the schedule is the slot calendar itself. No ladder, no daily cap to keep
-// in step with anything: eight slots in a day, one shot each.
+// in step with anything: eight slots in a day, one ticket each.
+//
+// HOW MANY SHOTS A SLOT HOLDS. A picture is ordered once, at a time chosen below.
+// The text quiz is asked twice, once in each sampling window of the slot, and
+// both results go into the one ticket (sample.go, quiz.go, settle.go). The quiz
+// does not use dueTargets; the picture track does.
 //
 // # WHY NOT AT THE SLOT BOUNDARY
 //
@@ -32,7 +36,7 @@ package probe
 // three-hour slot. The tail is the one that has already cost tickets, so it is
 // sized for the slower track rather than the faster one.
 //
-// # WHEN INSIDE THE WINDOW
+// # WHEN INSIDE THE WINDOW (a picture)
 //
 // As soon as it opens, in whatever order the round hands them over, and the
 // concurrency limits do the spacing (sixteen text groups at a time, four

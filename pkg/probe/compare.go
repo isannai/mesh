@@ -17,16 +17,16 @@ package probe
 //	          Different weights write something else, which a quiz answer
 //	          ("Paris") would not show.
 //	rounds    every node of a cohort is asked TWICE in a slot, once in each
-//	          sampling window, at a random moment inside it: the first half hour
-//	          of the firing window and the last. The two rounds have different
-//	          prompts. There is no retry: a node that does not answer within its
-//	          deadline has answered nothing.
+//	          sampling window (sample.go), at a random moment inside it. The two
+//	          rounds have different prompts. There is no retry: a node that does
+//	          not answer within its deadline has answered nothing.
 //	verdict   in each round answers are grouped by their first words. A group of
 //	          answers holding MORE THAN HALF the cohort wins; the nodes in it
 //	          pass the round and the rest fail it. No such group, or fewer than
 //	          compareMin answers: nobody fails.
-//	ticket    a node gets its ticket only if its quiz passed AND it did not fail
-//	          either round. Anything else, and the slot pays it nothing.
+//	ticket    a node gets its ticket only if its quiz passed in both rounds
+//	          (quiz.go) AND it did not fail either sentence round. Anything
+//	          else, and the slot pays it nothing.
 //
 // WHY NO STORED ANSWERS. The prompt is built from the slot, the group, the model
 // and the round, and carries a number only that seed fixes, so it is never asked
@@ -34,9 +34,9 @@ package probe
 // the only reference: a majority of copies of one fake would win, which is why a
 // /24 is counted once (see decideCohort).
 //
-// WHEN. A passing node's ticket is HELD (a round-0 row) until both rounds are
-// judged, which is a minute after the last sampling window closes. The ticket is
-// bound to the slot's root, so everything has to be settled before the slot ends.
+// WHEN. Nothing is issued here. Each round is judged a minute after its window
+// closes, and the slot's tickets are settled after the second (settle.go). A
+// ticket is bound to the slot's root, so that has to happen before the slot ends.
 
 import (
 	"crypto/sha256"
@@ -48,8 +48,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/isannai/mesh/pkg/faucet"
 )
 
 const (
@@ -68,22 +66,9 @@ const (
 
 	// compareKeepRunes is how much of the raw answer is stored for a later look.
 	compareKeepRunes = 200
-
-	// compareWindow is how long each sampling window is: the first and the last
-	// half hour of the firing window.
-	compareWindow = 30 * time.Minute
-
-	// compareSettleMargin is how long after a window closes the round waits
-	// before it is judged. Every ask is made inside the window and the prober
-	// waits for all of them before its next tick, so by then they are all in.
-	compareSettleMargin = time.Minute
 )
 
-// OutcomeHeld marks a round-0 row: the ticket of a node whose quiz passed,
-// waiting for the two rounds.
-const OutcomeHeld = "held"
-
-// The decisions a settled round writes (and, on a held ticket, win = issued and
+// The decisions a judged round writes (and, on a settled ticket, win = issued and
 // lose = refused).
 const (
 	DecisionWin  = "win"  // in the winning group of answers
@@ -269,79 +254,13 @@ func (p *Prober) buildCohorts() map[string]cohortKey {
 	return out
 }
 
-// compareWindows returns the two sampling windows as offsets from the slot
-// start: the first compareWindow of the firing window and the last. A firing
-// window too short for two of them is split in half.
-func compareWindows(slotSec int, lead, tail time.Duration) [2][2]time.Duration {
-	opens, closes := fireWindow(slotSec, lead, tail)
-	w := compareWindow
-	if half := (closes - opens) / 2; w > half {
-		w = half
-	}
-	return [2][2]time.Duration{{opens, opens + w}, {closes - w, closes}}
-}
-
-// compareClock is this slot's start and sampling windows.
-func (p *Prober) compareClock() (time.Time, [2][2]time.Duration) {
-	slotSec := p.assign.SlotSec
-	if slotSec <= 0 {
-		slotSec = faucet.SlotSeconds
-	}
-	start := time.Unix(faucet.SlotStartAt(p.assign.Epoch, slotSec), 0)
-	return start, compareWindows(slotSec, p.cfg.FireLead(), p.cfg.FireTail())
-}
-
-// compareMargin is how long after a window closes its round is judged.
-func (p *Prober) compareMargin() time.Duration {
-	m := compareSettleMargin
-	if half := p.cfg.FireTail() / 2; half < m {
-		m = half
-	}
-	return m
-}
-
-// compareRoundAt is the sampling round whose window holds now: 1, 2, or 0.
-func (p *Prober) compareRoundAt(now time.Time) int {
-	start, win := p.compareClock()
-	for i, w := range win {
-		if !now.Before(start.Add(w[0])) && now.Before(start.Add(w[1])) {
-			return i + 1
-		}
-	}
-	return 0
-}
-
-// compareOffset is the moment inside a round's window at which a node is asked.
-//
-// Random, so the whole cohort is not asked at one instant and a node cannot know
-// when its sample comes. It is kept for the slot, so a tick that comes round again
-// before the node is due does not draw a new moment. The span stops short of the
-// window's end by two ticks: a node due in the last seconds would otherwise fall
-// between two ticks and never be asked.
-func (p *Prober) compareOffset(round int, nodeID string, window time.Duration) time.Duration {
-	if p.compareAt == nil || p.compareAtEpoch != p.assign.Epoch {
-		p.compareAt, p.compareAtEpoch = map[string]time.Duration{}, p.assign.Epoch
-	}
-	key := fmt.Sprintf("%d|%s", round, nodeID)
-	if off, ok := p.compareAt[key]; ok {
-		return off
-	}
-	span := window - 2*time.Duration(p.cfg.FireIntervalSec)*time.Second
-	var off time.Duration
-	if span > 0 {
-		off = time.Duration(p.rng.Int63n(int64(span)))
-	}
-	p.compareAt[key] = off
-	return off
-}
-
 // fireCompare asks the nodes of this slot's cohorts whose moment in the current
 // sampling window has come. Nobody is asked twice in a round, whatever came back.
 func (p *Prober) fireCompare(now time.Time) {
 	if p.cfg.NoCompare || !p.hasAssign || p.assign.Stale(now) {
 		return
 	}
-	round := p.compareRoundAt(now)
+	round := p.sampleRoundAt(now)
 	if round == 0 {
 		return
 	}
@@ -355,7 +274,7 @@ func (p *Prober) fireCompare(now time.Time) {
 		return
 	}
 
-	start, win := p.compareClock()
+	start, win := p.sampleClock()
 	w := win[round-1]
 	var due []Target
 	seen := map[string]bool{}
@@ -369,7 +288,7 @@ func (p *Prober) fireCompare(now time.Time) {
 			continue
 		}
 		seen[t.Node.ID] = true
-		if now.Before(start.Add(w[0]).Add(p.compareOffset(round, t.Node.ID, w[1]-w[0]))) {
+		if now.Before(start.Add(w[0]).Add(p.sampleOffset("compare", round, t.Node.ID, w[1]-w[0]))) {
 			continue
 		}
 		due = append(due, t)
@@ -427,33 +346,6 @@ func (p *Prober) askCompare(t Target, k cohortKey, round int) (answer, outcome s
 	return fetched.Answer, OutcomeAnswered
 }
 
-// deferToCompare holds the ticket of a node whose quiz passed, if it is in a
-// cohort. It reports whether the ticket is held; false means issue it now.
-//
-// Nothing is sent to the node here. The sentence requests are made in the
-// sampling windows (fireCompare), whenever the quiz happened.
-func (p *Prober) deferToCompare(t Target) bool {
-	k, ok := p.cohorts[t.Node.ID]
-	if !ok || k.Epoch != p.assign.Epoch {
-		return false
-	}
-	if m, _, _, write := p.nodeTicketBudget(t); !write || m != k.Model {
-		return false
-	}
-	row := CompareRow{
-		Epoch: k.Epoch, Group: k.Group, Model: k.Model, Round: 0,
-		NodeID: t.Node.ID, Service: t.Service.Name, Slash24: t.Slash24,
-		AskedAt: time.Now(), Outcome: OutcomeHeld,
-	}
-	if err := p.store.RecordCompare(row); err != nil {
-		// Without the row the ticket could never be settled; paying it is the
-		// safer way to fail.
-		log.Printf("[probe] compare: hold %s: %v (ticket issued without the check)", short(t.Node.ID), err)
-		return false
-	}
-	return true
-}
-
 // emitTicket issues a ticket. It is a field-sized seam so a test can see who
 // would have been paid without signing anything.
 func (p *Prober) emitTicket(t Target, at time.Time, kind string) {
@@ -470,8 +362,8 @@ func (p *Prober) judgeRounds(now time.Time) {
 	if p.cfg.NoCompare || !p.hasAssign || p.assign.Stale(now) {
 		return
 	}
-	start, win := p.compareClock()
-	margin := p.compareMargin()
+	start, win := p.sampleClock()
+	margin := p.sampleMargin()
 	since := now.AddDate(0, 0, -p.cfg.ObservationDays)
 
 	for round := 1; round <= 2; round++ {
@@ -541,77 +433,6 @@ func (p *Prober) judgeRounds(now time.Time) {
 				round, k.group, shortModel(k.model), len(members), wins, loses, skips)
 		}
 	}
-}
-
-// settleTickets issues the held tickets of nodes that did not fail either round.
-//
-// It waits until both rounds are judged and then runs on every tick until the
-// slot ends, so a quiz that finished late is settled on the next tick. A node
-// that was never asked in a round (the prober was not up for it) has nothing
-// against it there: only an answer that failed counts against a node.
-func (p *Prober) settleTickets(now time.Time) {
-	if p.cfg.NoCompare || !p.hasAssign || p.assign.Stale(now) {
-		return
-	}
-	start, win := p.compareClock()
-	if now.Before(start.Add(win[1][1]).Add(p.compareMargin())) {
-		return
-	}
-	for round := 1; round <= 2; round++ {
-		open, err := p.store.OpenCompare(p.assign.Epoch, round)
-		if err != nil {
-			log.Printf("[probe] compare: open rows: %v", err)
-			return
-		}
-		if len(open) > 0 {
-			return // a round is not judged yet
-		}
-	}
-	held, err := p.store.OpenCompare(p.assign.Epoch, 0)
-	if err != nil {
-		log.Printf("[probe] compare: held tickets: %v", err)
-		return
-	}
-	if len(held) == 0 {
-		return
-	}
-	decisions, err := p.store.CompareDecisions(p.assign.Epoch)
-	if err != nil {
-		log.Printf("[probe] compare: decisions: %v", err)
-		return
-	}
-	targets := map[string]Target{}
-	for _, t := range p.targets {
-		targets[t.Node.ID+"|"+t.Service.Name] = t
-	}
-
-	var issued, refused int
-	for _, r := range held {
-		d := decisions[r.NodeID]
-		if d.Round1 == DecisionLose || d.Round2 == DecisionLose {
-			refused++
-			if err := p.store.SetCompareDecision(r, DecisionLose); err != nil {
-				log.Printf("[probe] compare: write decision for %s: %v", short(r.NodeID), err)
-			}
-			log.Printf("[probe] compare: %s passed the quiz but failed the model check (round 1 %s, round 2 %s): no ticket",
-				short(r.NodeID), orDash(d.Round1), orDash(d.Round2))
-			continue
-		}
-		t, ok := targets[r.NodeID+"|"+r.Service]
-		if !ok {
-			// Not in the directory any more: it cannot be given a ticket, and
-			// leaving the row open lets the next tick try again.
-			log.Printf("[probe] compare: %s is gone from the targets; ticket not issued", short(r.NodeID))
-			continue
-		}
-		p.emitTicket(t, now, faucet.KindText)
-		p.noteTicket(r.NodeID, VerdictPass, now)
-		issued++
-		if err := p.store.SetCompareDecision(r, DecisionWin); err != nil {
-			log.Printf("[probe] compare: write decision for %s: %v", short(r.NodeID), err)
-		}
-	}
-	log.Printf("[probe] compare: held tickets settled: %d issued, %d refused", issued, refused)
 }
 
 // orDash prints a decision for a log line, "-" for a round the node was not in.

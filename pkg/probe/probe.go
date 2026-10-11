@@ -31,7 +31,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/isannai/mesh/pkg/faucet"
 	"github.com/isannai/mesh/pkg/rvnodes"
 )
 
@@ -51,10 +50,11 @@ type Config struct {
 	FireIntervalSec int `json:"fire_interval_sec"`
 	// FireLeadSec and FireTailSec are the dead zones at the start and end of a
 	// slot, in SECONDS. A shot goes out somewhere between them — see
-	// schedule.go for why neither edge is usable.
+	// schedule.go for why neither edge is usable. The text quiz is asked in the
+	// first and the last half hour of what is left (sample.go).
 	//
-	// There is no ladder and no daily cap any more: one shot per slot is the
-	// whole rule, and the slot calendar decides how many that is.
+	// There is no ladder and no daily cap any more: the slot calendar decides how
+	// many shots a node gets, and a picture is asked once a slot, the quiz twice.
 	FireLeadSec float64 `json:"fire_lead_sec"`
 	FireTailSec float64 `json:"fire_tail_sec"`
 	// SubnetsPerRound and ImagesPerRound bound how much ONE round fires.
@@ -207,9 +207,10 @@ type Config struct {
 	// eventual "was this node public all day" rule reads them, so it outlives
 	// the 15-day claim window.
 	ObservationDays int `json:"observation_days"`
-	// NoCompare switches the model-identity check off (compare.go): tickets are
-	// issued as soon as a node passes, whatever else runs the same model in its
-	// group. It is an emergency switch, not a setting to leave on.
+	// NoCompare switches the model-identity check off (compare.go): no sentence
+	// request is sent, and a ticket is settled on the quiz alone, whatever else runs
+	// the same model in the node's group. It is an emergency switch, not a setting
+	// to leave on.
 	NoCompare bool `json:"no_compare"`
 	// QuestionFanout is how many nodes are asked the SAME question in one
 	// round — always in different /24s (see FireRound).
@@ -492,12 +493,11 @@ type Prober struct {
 	// judge waiting only burns someone else's GPU.
 	validator *Validator
 
-	// cohorts is this slot's model-identity cohorts, by node (compare.go).
-	cohorts map[string]cohortKey
-	// compareAt is the random moment, inside its sampling window, at which each
-	// node is asked in each round; kept for the slot named by compareAtEpoch.
-	compareAt      map[string]time.Duration
-	compareAtEpoch int64
+	// sampleAt is the random moment, inside its sampling window, at which each /24
+	// (the quiz) or node (the sentence request) is asked in each round; kept for
+	// the slot named by sampleAtEpoch (sample.go).
+	sampleAt      map[string]time.Duration
+	sampleAtEpoch int64
 	// issueFn replaces issueTicket in tests; nil in production.
 	issueFn func(Target, time.Time, string)
 
@@ -1019,7 +1019,9 @@ func (p *Prober) prune(now time.Time) {
 	}
 }
 
-// FireRound fires this round's share of the day's work.
+// FireRound fires this round's share of the slot's work: the quiz, if the clock
+// is inside one of the two sampling windows (sample.go), and a picture. It also
+// settles the slot's tickets once the second window is over (settle.go).
 //
 // HOW QUESTIONS ARE SHARED — the two rules point in opposite directions, and
 // both matter:
@@ -1039,9 +1041,10 @@ func (p *Prober) prune(now time.Time) {
 // the i-th node of every group gets question i. That is also what makes the
 // question supply affordable: 50,000 shots a day would need 50,000 questions
 // one-per-shot, but a few thousand this way.
-func (p *Prober) FireRound() {
-	now := time.Now()
+func (p *Prober) FireRound() { p.fireRoundAt(time.Now()) }
 
+// fireRoundAt is FireRound at a given moment, so a test can step through a slot.
+func (p *Prober) fireRoundAt(now time.Time) {
 	// One line per round, so a working prober is not silent. Declared up here
 	// because every stage reports into it — collection included, which is why a
 	// round can show more answers than it fired shots.
@@ -1096,44 +1099,46 @@ func (p *Prober) FireRound() {
 		return
 	}
 
-	// The model-identity check (compare.go): judge a sampling round once its
-	// window has closed, then settle the held tickets once both are judged.
+	// The model-identity check (compare.go) judges a sampling round once its
+	// window has closed, and the slot's tickets are settled once both are over
+	// (settle.go). Nothing is issued anywhere else.
 	p.judgeRounds(now)
 	p.settleTickets(now)
 
 	// Counted for THIS SLOT, not this day. The slot is the unit a ticket is
-	// keyed by, so it is also the unit the one-shot rule has to be counted in.
+	// keyed by, so it is also the unit a picture's one shot is counted in.
 	counts, err := p.store.ShotCountsInSlot(p.assign.Epoch)
 	if err != nil {
 		log.Printf("[probe] shot counts: %v", err)
 		return
 	}
 
-	// No random draw and no budget: a node is here because its offset into the
-	// slot has come up. Load spreads on its own — the offset is hashed per node
-	// and per slot, so the directory is smeared across the whole window.
-
 	// 🔴 The two tracks are independent. An earlier version returned here when
 	// no text node was due, which silently took the image round with it — a
 	// node serving only sd-api was then never fired at, and the log said
 	// nothing at all because the summary line lives past this point.
-	lead, tail := p.cfg.FireLead(), p.cfg.FireTail()
-	due := dueTargets(p.targets, now, p.assign, counts, lead, tail)
-	subnetBatch, _ := p.cfg.Batch()
-	groups := takeBatch(groupBySlash24(due), subnetBatch)
-	if len(groups) > 0 {
-		// 🔴 Claim the slot BEFORE the image track reads the same map. A node
-		// serving both llama and sd is one node with one root, so a text shot
-		// and an image shot in the same slot fold into one ticket — the second
-		// one is work the node does for nothing. The database catches this on
-		// the next round; this catches it within the round.
-		for _, g := range groups {
-			for _, t := range g {
-				counts[t.Node.ID]++
-			}
+
+	// The quiz, in the sampling window the clock is in (nothing between them). A
+	// node is asked once in each window, and the count is the round's own: having
+	// been asked in the first does not stop the second.
+	if round := p.sampleRoundAt(now); round > 0 {
+		asked, err := p.store.ShotCountsInRound(p.assign.Epoch, round)
+		if err != nil {
+			log.Printf("[probe] quiz counts: %v", err)
+			return
 		}
-		p.fireTextGroups(groups, now, &stats)
+		subnetBatch, _ := p.cfg.Batch()
+		groups := takeBatch(groupInOrder(p.dueQuiz(now, round, asked)), subnetBatch)
+		if len(groups) > 0 {
+			p.fireTextGroups(groups, now, round, &stats)
+		}
 	}
+
+	// 🔴 Claim the text nodes BEFORE the picture track reads the same map. A node
+	// serving both llama and sd is one node with one root, so a text shot and a
+	// picture in the same slot fold into one ticket — the second is work the node
+	// does for nothing (quiz.go).
+	p.claimTextNodes(counts)
 
 	// The sentence requests of the model-identity check go out in their own two
 	// windows, whatever the quiz is doing (compare.go).
@@ -1239,7 +1244,8 @@ func (p *Prober) collectRound(now time.Time, stats *roundStats) {
 	p.openShots = next
 }
 
-// fireTextGroups runs the text half of a round.
+// fireTextGroups runs the text half of a round: the quiz of sampling round
+// `round` (1 or 2), put to the groups that have come due.
 //
 // HOW QUESTIONS ARE SHARED — the two rules point in opposite directions, and
 // both matter:
@@ -1249,11 +1255,7 @@ func (p *Prober) collectRound(now time.Time, stats *roundStats) {
 //	                  question lets it generate once and copy the answer.
 //	across /24s       THE SAME question. Unrelated networks answering the same
 //	                  thing at the same moment is a free cross-check.
-func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, stats *roundStats) {
-	// Cohorts are read by the shots below and written only here, before they go
-	// out; the round waits for them all before it returns.
-	p.cohorts = p.buildCohorts()
-
+func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, round int, stats *roundStats) {
 	questions := p.takeQuestions(questionsNeeded(groups, p.cfg.QuestionFanout), now)
 	if len(questions) == 0 {
 		log.Printf("[probe] question queue is empty — skipping this round")
@@ -1291,7 +1293,7 @@ func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, stats *roundSt
 				inner.Add(1)
 				go func(t Target, q Question) {
 					defer inner.Done()
-					p.fireOne(t, q, stats)
+					p.fireOne(t, q, round, stats)
 				}(t, qs[i])
 			}
 			inner.Wait()
@@ -1364,8 +1366,10 @@ func (p *Prober) takeQuestions(n int, now time.Time) []Question {
 	return out
 }
 
-// fireOne runs one question through one node, submit to result.
-func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
+// fireOne runs one question through one node, submit to result. The result is
+// recorded and nothing more: a passing node is not issued a ticket here, because
+// its slot is decided as a whole once the second round is over (settle.go).
+func (p *Prober) fireOne(t Target, q Question, round int, stats *roundStats) {
 	now := time.Now()
 
 	sh := Shot{
@@ -1380,6 +1384,7 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		QuestionID:  q.ID,
 		AssignEpoch: p.assign.Epoch,
 		AssignRoot:  p.assign.Root,
+		Round:       round,
 	}
 
 	res, serr := p.firer.Submit(t, q)
@@ -1432,18 +1437,6 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 		fetched.PromptTokens, fetched.CompletionTokens, fetched.Answer, OutcomeAnswered, verdict); err != nil {
 		log.Printf("[probe] complete shot: %v", err)
 	}
-	if verdict == VerdictPass && p.deferToCompare(t) {
-		// Held: this node runs a model with a budget and shares a group with
-		// others on it, so its ticket waits for their answers (compare.go).
-		// settleCohorts issues it at the end of the slot.
-	} else {
-		p.noteTicket(t.Node.ID, verdict, end)
-		if verdict == VerdictPass {
-			// Signed and delivered here rather than batched: a ticket is bound to
-			// the slot's root, and the slot can end while a batch waits.
-			p.issueTicket(t, end, faucet.KindText)
-		}
-	}
 	switch verdict {
 	case VerdictFail:
 		log.Printf("[probe] %s answered %q, expected %q (%s)",
@@ -1458,10 +1451,10 @@ func (p *Prober) fireOne(t Target, q Question, stats *roundStats) {
 
 // noteTicket says a node just earned one of the day's tickets.
 //
-// 🔴 It only SAYS so. The ticket is the passing row itself, already written by
-// the caller, and the count is derived from the rows whenever anyone asks
-// (PassesToday). What a ticket is worth is decided when the voucher is signed,
-// so nothing here needs to know a rate.
+// 🔴 It only SAYS so. The ticket is already on record, a settled slot for text
+// (settle.go) or the passing row itself for a picture, and the count is derived
+// from the rows whenever anyone asks (PassesToday). What a ticket is worth is
+// decided when the voucher is signed, so nothing here needs to know a rate.
 //
 // A failed count is not worth failing over: this line is for the operator
 // watching the log, and the rows carry the fact regardless.

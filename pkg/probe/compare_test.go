@@ -140,7 +140,7 @@ func TestCompareStore(t *testing.T) {
 	other := row
 	other.Group, other.NodeID = 2, "S:0x02" // another group, kept apart
 	held := row
-	held.Round, held.Outcome, held.Key = 0, OutcomeHeld, ""
+	held.Round, held.Outcome, held.Key = 0, OutcomeSettled, ""
 	for _, r := range []CompareRow{r2, other, held} {
 		if err := s.RecordCompare(r); err != nil {
 			t.Fatal(err)
@@ -154,8 +154,8 @@ func TestCompareStore(t *testing.T) {
 	if open1[0].Key != "the lighthouse" || open1[0].Group != 1 {
 		t.Errorf("first answer was replaced: %+v", open1[0])
 	}
-	if got, _ := s.OpenCompare(7, 0); len(got) != 1 || got[0].Outcome != OutcomeHeld {
-		t.Errorf("held tickets = %+v", got)
+	if got, _ := s.OpenCompare(7, 0); len(got) != 1 || got[0].Outcome != OutcomeSettled {
+		t.Errorf("settled tickets = %+v", got)
 	}
 	if got, _ := s.OpenCompare(8, 1); len(got) != 0 {
 		t.Error("another slot's rows were returned")
@@ -175,7 +175,7 @@ func TestCompareStore(t *testing.T) {
 	if d := dec["S:0x01"]; d.Round1 != DecisionLose || d.Round2 != DecisionWin {
 		t.Errorf("decisions = %+v", d)
 	}
-	// Held tickets are not counted: only the rounds are.
+	// Settled tickets are not counted: only the rounds are.
 	if err := s.SetCompareDecision(held, DecisionLose); err != nil {
 		t.Fatal(err)
 	}
@@ -247,11 +247,13 @@ func compareProber(t *testing.T, n int) *Prober {
 // compareNode is a node bridge that answers each node with a text of the test's
 // choosing and keeps what it was asked.
 type compareNode struct {
-	mu      sync.Mutex
-	prompts []string
-	asked   map[string]int           // submits per node id
-	answer  func(node string) string // the text a node writes
-	refuse  map[string]bool          // nodes that reject the submit
+	mu       sync.Mutex
+	prompts  []string
+	asked    map[string]int                   // submits per node id
+	answer   func(node string) string         // the text a node writes
+	byPrompt func(node, prompt string) string // if set, used instead of answer
+	last     map[string]string                // the last prompt each node was sent
+	refuse   map[string]bool                  // nodes that reject the submit
 }
 
 func (c *compareNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +283,10 @@ func (c *compareNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.asked[node]++
 		prompt, _ := body["run"]["prompt"].(string)
 		c.prompts = append(c.prompts, prompt)
+		if c.last == nil {
+			c.last = map[string]string{}
+		}
+		c.last[node] = prompt
 		refused := c.refuse[node]
 		c.mu.Unlock()
 		if refused {
@@ -292,8 +298,17 @@ func (c *compareNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(path, "/result"):
 		id := strings.TrimSuffix(path, "/result")
 		id = id[strings.LastIndex(id, "/job-")+len("/job-"):]
+		text := ""
+		if c.byPrompt != nil {
+			c.mu.Lock()
+			prompt := c.last[id]
+			c.mu.Unlock()
+			text = c.byPrompt(id, prompt)
+		} else {
+			text = c.answer(id)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{"text": c.answer(id)}},
+			"choices": []map[string]any{{"text": text}},
 			"usage":   map[string]any{"prompt_tokens": 30, "completion_tokens": 12},
 		})
 	default:
@@ -329,67 +344,6 @@ func TestBuildCohorts(t *testing.T) {
 	off.cfg.NoCompare = true
 	if len(off.buildCohorts()) != 0 {
 		t.Error("NoCompare did not stop the cohorts")
-	}
-}
-
-// The two sampling windows are the first and the last half hour of the firing
-// window: 0:30 to 1:00 and 2:00 to 2:30 of a three hour slot.
-func TestCompareWindows(t *testing.T) {
-	w := compareWindows(faucet.SlotSeconds, 30*time.Minute, 30*time.Minute)
-	want := [2][2]time.Duration{{30 * time.Minute, time.Hour}, {2 * time.Hour, 2*time.Hour + 30*time.Minute}}
-	if w != want {
-		t.Errorf("windows = %v, want %v", w, want)
-	}
-	// A firing window too short for two half hours is split in half.
-	short := compareWindows(3600, 10*time.Minute, 10*time.Minute) // 10m .. 50m
-	if short[0][1] != 30*time.Minute || short[1][0] != 30*time.Minute {
-		t.Errorf("short windows = %v", short)
-	}
-
-	p := compareProber(t, 3)
-	start := compareSlotStart()
-	for _, c := range []struct {
-		at    time.Duration
-		round int
-	}{
-		{0, 0}, {29 * time.Minute, 0}, {30 * time.Minute, 1}, {59*time.Minute + 59*time.Second, 1},
-		{time.Hour, 0}, {90 * time.Minute, 0}, {2 * time.Hour, 2}, {2*time.Hour + 29*time.Minute, 2},
-		{2*time.Hour + 30*time.Minute, 0}, {2*time.Hour + 45*time.Minute, 0},
-	} {
-		if got := p.compareRoundAt(start.Add(c.at)); got != c.round {
-			t.Errorf("at %v: round %d, want %d", c.at, got, c.round)
-		}
-	}
-}
-
-// The moment a node is asked is random inside the window, stays the same for the
-// slot, and stops short of the window's end so no node falls between two ticks.
-func TestCompareOffset(t *testing.T) {
-	p := compareProber(t, 3)
-	seen := map[time.Duration]bool{}
-	for i := 0; i < 50; i++ {
-		id := fmt.Sprintf("S:0x%040x", i)
-		off := p.compareOffset(1, id, compareWindow)
-		if off < 0 || off >= compareWindow-2*time.Minute {
-			t.Fatalf("offset %v is outside the window", off)
-		}
-		if again := p.compareOffset(1, id, compareWindow); again != off {
-			t.Fatalf("the offset changed between ticks: %v then %v", off, again)
-		}
-		seen[off] = true
-	}
-	if len(seen) < 25 {
-		t.Errorf("only %d distinct moments for 50 nodes: not random", len(seen))
-	}
-	// A new slot draws again.
-	p.compareOffset(1, "S:0x01", compareWindow)
-	p.assign.Epoch++
-	if p.compareAtEpoch == p.assign.Epoch {
-		t.Fatal("test setup")
-	}
-	p.compareOffset(1, "S:0x01", compareWindow)
-	if p.compareAtEpoch != p.assign.Epoch {
-		t.Error("the offsets of the last slot were kept")
 	}
 }
 
@@ -475,41 +429,6 @@ func TestFireCompareStaysQuiet(t *testing.T) {
 	}
 }
 
-// The quiz holds the ticket and sends nothing; the sentence requests have their
-// own windows.
-func TestDeferToCompareHoldsTheTicket(t *testing.T) {
-	node := &compareNode{answer: func(string) string { return "x" }}
-	srv := httptest.NewServer(node)
-	defer srv.Close()
-
-	p := compareProber(t, 3)
-	p.firer = NewFirer(srv.URL)
-	p.cohorts = p.buildCohorts()
-
-	if !p.deferToCompare(p.targets[0]) {
-		t.Fatal("a node in a cohort was not held")
-	}
-	if len(node.prompts) != 0 {
-		t.Errorf("holding sent %d requests", len(node.prompts))
-	}
-	held, _ := p.store.OpenCompare(compareEpoch, 0)
-	if len(held) != 1 || held[0].Outcome != OutcomeHeld || held[0].NodeID != p.targets[0].Node.ID {
-		t.Fatalf("held = %+v", held)
-	}
-
-	// Not in a cohort: issued at once.
-	stranger := p.targets[0]
-	stranger.Node.ID = "S:0x" + strings.Repeat("f", 40)
-	if p.deferToCompare(stranger) {
-		t.Error("a node outside every cohort was held")
-	}
-	// A cohort left over from another slot does not hold anything.
-	p.assign.Epoch++
-	if p.deferToCompare(p.targets[1]) {
-		t.Error("a stale cohort held a ticket")
-	}
-}
-
 // compareRound writes a round's answers: key per target index, "" = no answer.
 func compareRound(t *testing.T, p *Prober, round int, keys ...string) {
 	t.Helper()
@@ -529,164 +448,6 @@ func compareRound(t *testing.T, p *Prober, round int, keys ...string) {
 	}
 }
 
-func holdTickets(t *testing.T, p *Prober, idx ...int) {
-	t.Helper()
-	for _, i := range idx {
-		tg := p.targets[i]
-		err := p.store.RecordCompare(CompareRow{
-			Epoch: compareEpoch, Group: 0, Model: "0x" + qwen14Hex, NodeID: tg.Node.ID, Round: 0,
-			Service: "llm", Slash24: tg.Slash24, AskedAt: compareSlotStart().Add(time.Hour), Outcome: OutcomeHeld,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func issuedBy(p *Prober, into *[]string) {
 	p.issueFn = func(tg Target, _ time.Time, _ string) { *into = append(*into, tg.Node.ID) }
-}
-
-// 🔴 A ticket needs the quiz AND both rounds. Failing either round is no ticket,
-// and the rounds are judged when their window has closed, not before.
-func TestJudgeAndSettleNeedsBothRounds(t *testing.T) {
-	p := compareProber(t, 5)
-	var issued []string
-	issuedBy(p, &issued)
-	start := compareSlotStart()
-
-	holdTickets(t, p, 0, 1, 2, 3, 4)
-	// Round 1: node 4 is the odd one out. Round 2: node 3 is.
-	compareRound(t, p, 1, "a1", "a1", "a1", "a1", "b1")
-	compareRound(t, p, 2, "a2", "a2", "a2", "b2", "a2")
-
-	// While the first window is still open nothing is judged.
-	p.judgeRounds(start.Add(59 * time.Minute))
-	p.settleTickets(start.Add(59 * time.Minute))
-	if open, _ := p.store.OpenCompare(compareEpoch, 1); len(open) != 5 {
-		t.Fatal("round 1 was judged before its window closed")
-	}
-
-	// Just after it: round 1 is judged, round 2 is not, no ticket yet.
-	p.judgeRounds(start.Add(time.Hour + 2*time.Minute))
-	p.settleTickets(start.Add(time.Hour + 2*time.Minute))
-	if open, _ := p.store.OpenCompare(compareEpoch, 1); len(open) != 0 {
-		t.Error("round 1 was not judged once its window closed")
-	}
-	if open, _ := p.store.OpenCompare(compareEpoch, 2); len(open) != 5 {
-		t.Error("round 2 was judged early")
-	}
-	if len(issued) != 0 {
-		t.Fatalf("tickets issued before round 2 was judged: %v", issued)
-	}
-
-	// After the second window: round 2 is judged and the tickets go out.
-	p.judgeRounds(start.Add(2*time.Hour + 31*time.Minute))
-	p.settleTickets(start.Add(2*time.Hour + 31*time.Minute))
-	if len(issued) != 3 {
-		t.Fatalf("issued %d tickets, want the 3 that failed neither round: %v", len(issued), issued)
-	}
-	for _, id := range issued {
-		if id == p.targets[3].Node.ID || id == p.targets[4].Node.ID {
-			t.Errorf("%s failed a round and was paid", id)
-		}
-	}
-	if tally, _ := p.store.CompareStats(p.targets[4].Node.ID, start.Add(-time.Hour)); tally.Lose != 1 {
-		t.Errorf("the lost round was not recorded: %+v", tally)
-	}
-
-	// A second pass finds nothing left to decide.
-	p.judgeRounds(start.Add(2*time.Hour + 40*time.Minute))
-	p.settleTickets(start.Add(2*time.Hour + 40*time.Minute))
-	if len(issued) != 3 {
-		t.Errorf("a settled ticket was issued again: %v", issued)
-	}
-}
-
-// A node that gave no answer in a round that was judged fails it.
-func TestSilentNodeFailsAJudgedRound(t *testing.T) {
-	p := compareProber(t, 4)
-	var issued []string
-	issuedBy(p, &issued)
-	holdTickets(t, p, 0, 1, 2, 3)
-	compareRound(t, p, 1, "a", "a", "a", "") // node 3 timed out
-	compareRound(t, p, 2, "a", "a", "a", "a")
-
-	at := compareSlotStart().Add(2*time.Hour + 31*time.Minute)
-	p.judgeRounds(at)
-	p.settleTickets(at)
-	if len(issued) != 3 {
-		t.Fatalf("issued %v, want the three that answered", issued)
-	}
-	for _, id := range issued {
-		if id == p.targets[3].Node.ID {
-			t.Error("the node that did not answer was paid")
-		}
-	}
-}
-
-// A round too small or too split to judge pays everybody.
-func TestUnjudgedRoundsPayEveryone(t *testing.T) {
-	p := compareProber(t, 4)
-	var issued []string
-	issuedBy(p, &issued)
-	holdTickets(t, p, 0, 1, 2, 3)
-	// Round 1: only two answered. Round 2: a 2-2 draw.
-	compareRound(t, p, 1, "a", "b", "", "")
-	compareRound(t, p, 2, "a", "a", "b", "b")
-
-	at := compareSlotStart().Add(2*time.Hour + 31*time.Minute)
-	p.judgeRounds(at)
-	p.settleTickets(at)
-	if len(issued) != 4 {
-		t.Fatalf("issued %d tickets, want all 4: %v", len(issued), issued)
-	}
-}
-
-// A node never asked in a round has nothing against it; a quiz that finishes
-// after the settle is settled on the next tick.
-func TestSettleHandlesLateQuizAndMissingRounds(t *testing.T) {
-	p := compareProber(t, 4)
-	var issued []string
-	issuedBy(p, &issued)
-	start := compareSlotStart()
-
-	holdTickets(t, p, 0, 1, 2)
-	compareRound(t, p, 1, "a", "a", "a")
-	compareRound(t, p, 2, "a", "a", "a")
-	at := start.Add(2*time.Hour + 31*time.Minute)
-	p.judgeRounds(at)
-	p.settleTickets(at)
-	if len(issued) != 3 {
-		t.Fatalf("issued %v", issued)
-	}
-
-	// Node 3's quiz passes only now and it was never asked in either round.
-	holdTickets(t, p, 3)
-	p.settleTickets(at.Add(time.Minute))
-	if len(issued) != 4 || issued[3] != p.targets[3].Node.ID {
-		t.Errorf("the late quiz was not settled: %v", issued)
-	}
-}
-
-// The switch stops the whole check, and the slot ending stops it too.
-func TestSettleDoesNothingWhenOff(t *testing.T) {
-	p := compareProber(t, 3)
-	var issued []string
-	issuedBy(p, &issued)
-	holdTickets(t, p, 0, 1, 2)
-	at := compareSlotStart().Add(2*time.Hour + 31*time.Minute)
-
-	p.cfg.NoCompare = true
-	p.judgeRounds(at)
-	p.settleTickets(at)
-	if len(issued) != 0 {
-		t.Errorf("issued %v with the check off", issued)
-	}
-
-	p.cfg.NoCompare = false
-	p.settleTickets(compareSlotStart().Add(4 * time.Hour)) // another slot by then
-	if len(issued) != 0 {
-		t.Errorf("settled a slot that was over: %v", issued)
-	}
 }

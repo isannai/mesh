@@ -125,10 +125,7 @@ func nodeAddressOf(id string) string {
 func groupBySlash24(targets []Target) [][]Target {
 	buckets := map[string][]Target{}
 	for _, t := range targets {
-		key := t.Slash24
-		if key == "" {
-			key = "node:" + t.Node.ID
-		}
+		key := slash24Key(t)
 		buckets[key] = append(buckets[key], t)
 	}
 	keys := make([]string, 0, len(buckets))

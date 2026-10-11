@@ -141,8 +141,9 @@ CREATE INDEX IF NOT EXISTS q_text        ON question(category, q);
 --   round 1, 2   a node's answer to the group's comparison prompt in that
 --                sampling window. decision is '' until the round is judged,
 --                then win | lose | skip.
---   round 0      the node's ticket, held after its quiz passed. decision is ''
---                until the ticket is settled, then win (issued) | lose (refused).
+--   round 0      the node's ticket for the slot, written when the slot settles
+--                (settle.go): win (issued) | lose (refused). One row per node and
+--                slot is what stops a later tick from settling it again.
 CREATE TABLE IF NOT EXISTS compare (
   epoch      INTEGER NOT NULL,
   group_idx  INTEGER NOT NULL,
@@ -179,6 +180,19 @@ var addedColumns = []string{
 	// destroy the only record of what those shots were fired under.
 	`ALTER TABLE shot ADD COLUMN assign_epoch INTEGER`,
 	`ALTER TABLE shot ADD COLUMN assign_root TEXT`,
+	// Which of the slot's two quiz rounds a text shot belongs to (quiz.go): 1 or
+	// 2. Rows from before the quiz was asked twice, and every image shot, keep 0.
+	`ALTER TABLE shot ADD COLUMN round INTEGER NOT NULL DEFAULT 0`,
+}
+
+// addedIndexes are indexes on those columns. They cannot sit in the schema above:
+// on a database made before the column existed, the schema runs first and an index
+// naming the column would fail the whole open.
+var addedIndexes = []string{
+	// Every tick asks which nodes a slot has shot already (per slot, per quiz round)
+	// and reads the slot's quiz shots back. Without it each of those reads the whole
+	// shot history, which is a month of it.
+	`CREATE INDEX IF NOT EXISTS shot_epoch ON shot(assign_epoch, round, node_id)`,
 }
 
 func (s *Store) migrate() error {
@@ -187,6 +201,11 @@ func (s *Store) migrate() error {
 	}
 	for _, stmt := range addedColumns {
 		_, _ = s.db.Exec(stmt)
+	}
+	for _, stmt := range addedIndexes {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("probe db index: %w", err)
+		}
 	}
 	return nil
 }
@@ -346,6 +365,10 @@ type Shot struct {
 	AssignEpoch int64
 	AssignRoot  string
 
+	// Round is the quiz round of the slot (1 or 2) a text shot was fired in. Zero
+	// for an image shot, which is asked once.
+	Round int
+
 	// Deferred is how many rounds we held off before firing this shot because
 	// the node's queue was not empty. Read it next to LatencyMs: a fast time
 	// with a high count is a busy node that happens to be quick, while a slow
@@ -369,11 +392,11 @@ func (s *Store) RecordShot(sh Shot) (int64, error) {
 		// timeout diagnosable at all.
 		`INSERT INTO shot(fired_at,node_id,node_addr,slash24,engine,service,model,model_hash,
 		                  job_id,question_id,submit_status,outcome,assign_epoch,assign_root,answer_raw,
-		                  deferred,order_json)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		                  deferred,order_json,round)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sh.FiredAt.UnixMilli(), sh.NodeID, sh.NodeAddr, sh.Slash24, sh.Engine, sh.Service,
 		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.AssignEpoch, sh.AssignRoot,
-		sh.AnswerRaw, sh.Deferred, sh.OrderJSON)
+		sh.AnswerRaw, sh.Deferred, sh.OrderJSON, sh.Round)
 	if err != nil {
 		return 0, err
 	}
@@ -388,9 +411,10 @@ func (s *Store) RecordShot(sh Shot) (int64, error) {
 // because it bounds the real value from above, and labelled as observed so a
 // later reader does not mistake it for something the node reported.
 // The verdict is written in the SAME statement as the answer, never by a later
-// pass. A ticket is signed at fire time, so a verdict arriving afterwards has no
-// ticket left to affect (ticket-model.md). The raw answer is stored alongside it
-// so a disputed question stays re-examinable without firing again.
+// pass. The ticket is signed when the slot settles (settle.go), which reads the
+// verdicts as they stand then, so a verdict written afterwards would be one
+// nobody reads. The raw answer is stored alongside it so a disputed question
+// stays re-examinable without firing again.
 func (s *Store) CompleteShot(id int64, fetchedAt time.Time, latencyMs int64,
 	promptTokens, completionTokens int, answer, outcome, verdict string) error {
 	_, err := s.db.Exec(
@@ -406,20 +430,31 @@ func (s *Store) FailShot(id int64, at time.Time, outcome string) error {
 	return err
 }
 
-// PassesToday counts each node's earned tickets for the day.
+// PassesToday counts each node's earned tickets for the day, one per slot.
 //
-// This is the whole of what a ticket carries: how many of the day's five a node
+// This is the whole of what a ticket carries: how many of the day's slots a node
 // earned. What they are WORTH is the voucher's business, decided from this
 // count when it is signed, so nothing here needs redeploying to change a rate.
 //
 // Counted from the rows rather than kept as a running total. A stored counter
 // would be a second copy of what the rows already say, and the two drift on the
 // first correction — a shot re-judged, a row cleaned up.
+//
+// Two kinds of row say "earned". A text slot is earned when it settles with a win
+// (round 0 of the compare table, settle.go), because one slot holds two quiz
+// passes and counting the shots would count it twice. A picture, and a text shot
+// from before the quiz was asked twice, is earned by its own passing row (round 0
+// of the shot table). The UNION folds a slot that somehow has both into one.
 func (s *Store) PassesToday(dayStart time.Time) (map[string]int, error) {
 	rows, err := s.db.Query(
-		`SELECT node_id, COUNT(*) FROM shot
-		  WHERE fired_at>=? AND verdict=? GROUP BY node_id`,
-		dayStart.UnixMilli(), VerdictPass)
+		`SELECT node_id, COUNT(*) FROM (
+		   SELECT node_id, assign_epoch AS slot FROM shot
+		    WHERE fired_at>=? AND verdict=? AND round=0
+		   UNION
+		   SELECT node_id, epoch AS slot FROM compare
+		    WHERE asked_at>=? AND round=0 AND decision=?
+		 ) GROUP BY node_id`,
+		dayStart.UnixMilli(), VerdictPass, dayStart.UnixMilli(), DecisionWin)
 	if err != nil {
 		return nil, err
 	}
@@ -495,6 +530,60 @@ func (s *Store) ShotCountsInSlot(epoch int64) (map[string]int, error) {
 			return nil, err
 		}
 		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// ShotCountsInRound returns the text shots fired so far in one quiz round of a
+// slot, per node. Every outcome counts, a refusal and a timeout included: the
+// round is asked once and never again.
+func (s *Store) ShotCountsInRound(epoch int64, round int) (map[string]int, error) {
+	rows, err := s.db.Query(
+		`SELECT node_id, COUNT(*) FROM shot WHERE assign_epoch=? AND round=? GROUP BY node_id`,
+		epoch, round)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// QuizShot is one text shot of a slot as the settlement reads it.
+type QuizShot struct {
+	NodeID    string
+	Service   string
+	ModelHash string // as the node reported it when it was asked
+	Round     int
+	Outcome   string
+	Verdict   string
+}
+
+// QuizShots returns the text shots of both quiz rounds of a slot, oldest first.
+// A picture (round 0) is not one of them.
+func (s *Store) QuizShots(epoch int64) ([]QuizShot, error) {
+	rows, err := s.db.Query(
+		`SELECT node_id, COALESCE(service,''), COALESCE(model_hash,''), round, outcome, COALESCE(verdict,'')
+		   FROM shot WHERE assign_epoch=? AND round IN (1, 2) ORDER BY id`, epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QuizShot
+	for rows.Next() {
+		var q QuizShot
+		if err := rows.Scan(&q.NodeID, &q.Service, &q.ModelHash, &q.Round, &q.Outcome, &q.Verdict); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
 	}
 	return out, rows.Err()
 }
@@ -648,21 +737,22 @@ func (s *Store) PruneShots(cutoff time.Time) (int64, error) {
 }
 
 // CompareRow is one row of the model-identity check (compare.go): a node's
-// answer in one sampling round, or (round 0) its ticket held for the check.
+// answer in one sampling round, or (round 0) the record that its ticket for the
+// slot was settled (settle.go).
 type CompareRow struct {
 	Epoch   int64
 	Group   int
-	Model   string // 0x + 64 hex, the ticket spelling
+	Model   string // 0x + 64 hex, the ticket spelling; "" on a plain ticket's record
 	NodeID  string
-	Round   int // 1 or 2 for an answer, 0 for the held ticket
+	Round   int // 1 or 2 for an answer, 0 for a settled ticket
 	Service string
 	Slash24 string
 	AskedAt time.Time
 	Key     string // the normalised prefix that is compared; "" when the node gave no answer
 	Answer  string // as it came, cut to a length worth keeping
 	Outcome string
-	// Decision is "" until the round (or the held ticket) is settled, then
-	// win | lose | skip.
+	// Decision is "" until the round is judged, then win | lose | skip. A settled
+	// ticket is written with its decision: win (issued) or lose (refused).
 	Decision string
 }
 
@@ -678,8 +768,40 @@ func (s *Store) RecordCompare(r CompareRow) error {
 	return err
 }
 
+// RecordSettlement writes the round-0 record that a node's ticket for the slot has
+// been decided, win or lose. It replaces a round-0 row of the same key that has no
+// decision, such as one an earlier version left held, so the node is not decided
+// again on every tick.
+func (s *Store) RecordSettlement(r CompareRow) error {
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO compare
+		  (epoch, group_idx, model_hash, node_id, round, service, slash24, asked_at, answer_key, answer, outcome, decision)
+		VALUES (?,?,?,?,0,?,?,?,'',NULL,?,?)`,
+		r.Epoch, r.Group, r.Model, r.NodeID, r.Service, r.Slash24, r.AskedAt.UnixMilli(), r.Outcome, r.Decision)
+	return err
+}
+
+// SettledTickets is the set of nodes whose ticket for the slot has been decided,
+// issued or refused. A node in it is not decided again by a later tick.
+func (s *Store) SettledTickets(epoch int64) (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT node_id FROM compare WHERE epoch = ? AND round = 0 AND decision <> ''`, epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // OpenCompare returns the slot's rows of one round that no decision has been
-// written for. Round 0 is the held tickets.
+// written for.
 func (s *Store) OpenCompare(epoch int64, round int) ([]CompareRow, error) {
 	rows, err := s.db.Query(`
 		SELECT epoch, group_idx, model_hash, node_id, round, service, COALESCE(slash24,''),

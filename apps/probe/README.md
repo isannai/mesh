@@ -72,6 +72,47 @@ measures nothing. (`"fire_at_self": true` turns that off, for a single-machine
 test.) The writers are **not** dropped — arithmetic is generated here, fresh per
 shot, so an allied node still answers something it could not have prepared.
 
+## When it asks
+
+A slot is three hours. Every text node is asked the quiz **twice** in it, once in
+each sampling window, at a random moment inside the window:
+
+```
+0:00 ........ the slot opens; nothing is sent
+0:30 - 1:00   round 1: every node is asked once, at its own random moment
+2:00 - 2:30   round 2: every node is asked once, at its own random moment
+2:31 - 2:59   the slot's tickets are decided, signed and handed to the nodes
+3:00 ........ the slot ends
+```
+
+- Every node behind one /24 is asked at the same moment, because a farm of
+  registrations sharing one GPU answers one at a time fine and fails all at once.
+  The moment is drawn per /24 and per round.
+- Nobody is asked twice in a round, whatever came back. There is no retry.
+- A ticket needs the quiz passed in **both rounds**. A round the node was asked in
+  and did not pass is lost: a wrong answer, one cut off by the token cap, a
+  refusal, a full queue, or no answer inside its deadline. A round it was not
+  asked in is not a pass either (the prober was down for the whole window, the node
+  was not in the directory during it, or the prober's own shot failed), and the
+  windows are closed by the time the slot is settled, so that slot has no ticket.
+- Nothing is issued when an answer comes back. Every node is decided once, from a
+  minute after the second window closes until the slot ends, and a node keeps only
+  the first ticket it is handed for a slot.
+- A node in a group of three or more running the same model is also sent a
+  sentence request in each window and must not lose either round (`compare.go`).
+- Pictures are ordered once a slot, as soon as the firing window opens, and are
+  not part of any of this.
+
+Two limits to size against, both from putting every ticket in the last half hour:
+
+```
+subnets_per_round   /24s taken per minute. A 30-minute window takes at most 30 times this
+                    many, so 2 (the shipped value) is 60 networks per round. A node
+                    not reached in both rounds gets no ticket for the slot
+TPM signing         about 3 seconds a signature, one at a time; a model ticket signs twice.
+                    A few hundred tickets per prober per slot is the ceiling
+```
+
 ## Designated models
 
 Every node that passes the check gets a ticket. The designated model list only
@@ -139,9 +180,8 @@ conf/probe.json  every setting has a working default
 
 ## Scoring
 
-Answers are scored as they arrive, in the same write as the answer itself — a
-ticket is signed at fire time, so a verdict that turns up later has no ticket
-left to affect.
+Answers are scored as they arrive, in the same write as the answer itself. The
+ticket is signed later, when the slot settles, from the verdicts on record.
 
 ```
 math            the first number, compared exactly. "192" is not "92"

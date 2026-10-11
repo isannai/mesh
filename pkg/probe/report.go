@@ -43,7 +43,7 @@ func (s *Store) Report(limit int) (string, error) {
 		SELECT s.fired_at, s.node_id, s.outcome, COALESCE(s.verdict,''),
 		       COALESCE(s.latency_ms,0), COALESCE(s.completion_tokens,0),
 		       COALESCE(q.category,''), COALESCE(q.q,''), COALESCE(q.draft_answer,''),
-		       COALESCE(s.answer_raw,''), COALESCE(s.deferred,0)
+		       COALESCE(s.answer_raw,''), COALESCE(s.deferred,0), s.round
 		  FROM shot s LEFT JOIN question q ON q.id = s.question_id
 		 ORDER BY s.id DESC LIMIT ?`, limit)
 	if err != nil {
@@ -56,15 +56,20 @@ func (s *Store) Report(limit int) (string, error) {
 		var (
 			firedMs, latency          int64
 			node, outcome, verdict    string
-			tokens, deferred          int
+			tokens, deferred, round   int
 			cat, q, expected, gotText string
 		)
 		if err := rows.Scan(&firedMs, &node, &outcome, &verdict, &latency, &tokens,
-			&cat, &q, &expected, &gotText, &deferred); err != nil {
+			&cat, &q, &expected, &gotText, &deferred, &round); err != nil {
 			return "", err
 		}
 		any = true
-		fmt.Fprintf(&b, "  %s  %s  %s", time.UnixMilli(firedMs).Format("15:04:05"), short(node), outcome)
+		fmt.Fprintf(&b, "  %s  %s", time.UnixMilli(firedMs).Format("15:04:05"), short(node))
+		if round > 0 {
+			// A text node is asked twice a slot; which of the two this was.
+			fmt.Fprintf(&b, "  round %d", round)
+		}
+		fmt.Fprintf(&b, "  %s", outcome)
 		if verdict != "" {
 			fmt.Fprintf(&b, "/%s", verdict)
 		}

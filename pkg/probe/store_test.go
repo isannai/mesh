@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -249,5 +250,55 @@ func TestOpenIsIdempotent(t *testing.T) {
 	d, _ := s2.QueueDepth()
 	if d[CatMath] != 1 {
 		t.Errorf("data lost across reopen: %+v", d)
+	}
+}
+
+// 🔴 A database made before the quiz was asked twice has no round column. Opening
+// it must add the column without touching the history in it, or every INSERT that
+// names the column fails on an operator's node with a month of shots in it.
+func TestShotRoundColumnIsAddedToAnOlderDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = old.Exec(`CREATE TABLE shot (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, fired_at INTEGER NOT NULL, node_id TEXT NOT NULL,
+		node_addr TEXT NOT NULL, slash24 TEXT NOT NULL, engine TEXT, service TEXT, model TEXT,
+		model_hash TEXT, job_id TEXT, question_id INTEGER, submit_status INTEGER, fetched_at INTEGER,
+		latency_ms INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER, answer_raw TEXT,
+		outcome TEXT NOT NULL, verdict TEXT, appointment TEXT, assign_epoch INTEGER, assign_root TEXT,
+		deferred INTEGER, order_json TEXT)`)
+	if err == nil {
+		_, err = old.Exec(`INSERT INTO shot(fired_at, node_id, node_addr, slash24, outcome, verdict, assign_epoch)
+			VALUES (1, 'S:0x01', 'a', '10.0.0', 'answered', 'pass', 7)`)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.RecordShot(Shot{FiredAt: time.Now(), NodeID: "S:0x02", Outcome: OutcomeAnswered,
+		AssignEpoch: 7, Round: 2}); err != nil {
+		t.Fatalf("a shot with a round could not be written: %v", err)
+	}
+
+	// The old row is round 0: not a quiz round, but still a shot of the slot.
+	if n, _ := s.ShotCountsInRound(7, 0); n["S:0x01"] != 1 || len(n) != 1 {
+		t.Errorf("round 0 = %v, want only the old row", n)
+	}
+	if n, _ := s.ShotCountsInRound(7, 2); n["S:0x02"] != 1 || len(n) != 1 {
+		t.Errorf("round 2 = %v, want only the new row", n)
+	}
+	if n, _ := s.ShotCountsInSlot(7); len(n) != 2 {
+		t.Errorf("slot count = %v, want both", n)
+	}
+	if shots, _ := s.QuizShots(7); len(shots) != 1 || shots[0].NodeID != "S:0x02" {
+		t.Errorf("quiz shots = %+v, want only the round 2 row", shots)
 	}
 }
