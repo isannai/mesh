@@ -229,7 +229,7 @@ func compareProber(t *testing.T, n int) *Prober {
 		cfg:   Config{ObservationDays: 30, FireLeadSec: 1800, FireTailSec: 1800, FireIntervalSec: 60, TextDeadline: 5},
 		store: s, firer: NewFirer("http://127.0.0.1:1"), hasAssign: true,
 		rng:          rand.New(rand.NewSource(1)),
-		models:       map[string]budgetRef{"0x" + qwen14Hex: {"2", "14.768", 14768307200}},
+		models:       map[string]budgetRef{"0x" + qwen14Hex: {"2"}},
 		budgetsRead:  true,
 		systemBudget: "1",
 	}
@@ -332,12 +332,13 @@ func TestBuildCohorts(t *testing.T) {
 			t.Errorf("%s: %+v", id, k)
 		}
 	}
-	// A node whose reported size does not fit is not in it, and leaves two.
-	bad := compareProber(t, 3)
-	bad.targets[0].Service.ModelClass = &rvnodes.ModelClass{ParamsCore: 1777088000}
-	bad.targets[0].Node.Services = []rvnodes.Service{bad.targets[0].Service}
-	if got := bad.buildCohorts(); len(got) != 0 {
-		t.Errorf("a node that does not fit still counted: %v", got)
+	// A node that reports another size is still in it: the size is not held
+	// against the budget any more (2026-10-13). Its output is, here.
+	other := compareProber(t, 3)
+	other.targets[0].Service.ModelClass = &rvnodes.ModelClass{ParamsCore: 1777088000}
+	other.targets[0].Node.Services = []rvnodes.Service{other.targets[0].Service}
+	if got := other.buildCohorts(); len(got) != 3 {
+		t.Errorf("a node reporting another size left the cohort: %v", got)
 	}
 	// The switch turns it off.
 	off := compareProber(t, 3)

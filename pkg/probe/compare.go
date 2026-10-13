@@ -3,9 +3,9 @@ package probe
 // The model-identity check (WS-25).
 //
 // A node says which model it runs by reporting the model file's hash to the
-// directory, and the prober believed it. The size check (models.go, paramsFit)
-// catches a hash that does not fit the budget, but the size is the node's own
-// word as well. This check asks the model itself.
+// directory, and the prober believed it. Its reported size is its own word as
+// well, and the budget lists no size to hold it against any more (2026-10-13).
+// This check asks the model itself.
 //
 // HOW IT WORKS
 //
