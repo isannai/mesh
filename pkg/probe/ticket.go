@@ -85,7 +85,7 @@ func (p *Prober) issueTicket(t Target, at time.Time, kind string) {
 	if gi < 0 {
 		return
 	}
-	model, params, budgetID, write := p.nodeTicketBudget(t)
+	model, params, budgetID, write, _ := p.ticketFor(t)
 	if !write {
 		return
 	}

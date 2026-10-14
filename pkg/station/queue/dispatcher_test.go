@@ -431,3 +431,57 @@ func TestManagedProcessThroughQueueWorker(t *testing.T) {
 		t.Error("URL not set after storage save")
 	}
 }
+
+// TestManagedProcessKeepsTokenProbs: a job asking for per-token candidates (the
+// faucet prober's reference check) is NOT forced into a stream, so the engine's
+// completion_probabilities come back whole. The same for llama.cpp's own
+// /completion, whose stream chunks the reassembly cannot read.
+func TestManagedProcessKeepsTokenProbs(t *testing.T) {
+	const answer = `{"content":" Paris is","completion_probabilities":[{"token":" Paris","logprob":-0.01,"top_logprobs":[{"token":" Paris","logprob":-0.01},{"token":" Lyon","logprob":-5.2}]},{"token":" is","logprob":-0.3,"top_logprobs":[{"token":" is","logprob":-0.3}]}]}`
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(answer))
+	}))
+	defer srv.Close()
+
+	svc := setup.ServiceEntry{Name: "llm-api", Addr: addrFromTestServer(srv)}
+	process := MakeManagedProcess(svc, DispatchOptions{StreamPath: "choices[0].delta.content"})
+	for _, job := range []*Job{
+		{ID: "p1", ServiceName: "llm-api", Path: "/completion", RequestBody: []byte(`{"prompt":"Q","n_predict":8,"n_probs":5}`)},
+		{ID: "p2", ServiceName: "llm-api", Path: "/v1/completions", RequestBody: []byte(`{"prompt":"Q","n_probs":5}`)},
+	} {
+		code, _, body, err := process(context.Background(), job)
+		if err != nil || code != 200 {
+			t.Fatalf("%s: code %d, err %v", job.Path, code, err)
+		}
+		if strings.Contains(gotBody, `"stream":true`) {
+			t.Errorf("%s: the engine was asked to stream: %s", job.Path, gotBody)
+		}
+		if string(body) != answer {
+			t.Errorf("%s: result %s, want the engine's answer verbatim", job.Path, body)
+		}
+	}
+}
+
+func TestBufferedJob(t *testing.T) {
+	cases := []struct {
+		path, body string
+		want       bool
+	}{
+		{"/v1/chat/completions", `{"messages":[]}`, false},
+		{"/v1/chat/completions", `{"n_probs":5}`, true},
+		{"/v1/chat/completions", `{"n_probs":0}`, false},
+		{"/v1/chat/completions", `{"logprobs":true,"top_logprobs":5}`, true},
+		{"/v1/completions", `{"logprobs":3}`, true},
+		{"/completion", `{"prompt":"x"}`, true},
+		{"/v1/chat/completions", `not json`, false},
+	}
+	for _, c := range cases {
+		if got := bufferedJob(&Job{Path: c.path, RequestBody: []byte(c.body)}); got != c.want {
+			t.Errorf("bufferedJob(%s %s) = %v, want %v", c.path, c.body, got, c.want)
+		}
+	}
+}

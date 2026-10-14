@@ -66,29 +66,25 @@ func TestDecideTicket(t *testing.T) {
 	cases := []struct {
 		name string
 		r    [2]*QuizShot
-		d    RoundDecisions
 		want ticketCall
 	}{
-		{"both rounds passed", [2]*QuizShot{pass, pass}, RoundDecisions{}, callIssue},
-		{"the first round wrong", [2]*QuizShot{sh(OutcomeAnswered, VerdictFail), pass}, RoundDecisions{}, callRefuse},
-		{"the second round wrong", [2]*QuizShot{pass, sh(OutcomeAnswered, VerdictFail)}, RoundDecisions{}, callRefuse},
-		{"an answer cut off is not a pass", [2]*QuizShot{pass, sh(OutcomeAnswered, VerdictTruncated)}, RoundDecisions{}, callRefuse},
-		{"no answer in time", [2]*QuizShot{pass, sh(OutcomeTimeout, "")}, RoundDecisions{}, callRefuse},
-		{"refused", [2]*QuizShot{sh(OutcomeRefused, ""), pass}, RoundDecisions{}, callRefuse},
-		{"queue full", [2]*QuizShot{pass, sh(OutcomeQueueFull, "")}, RoundDecisions{}, callRefuse},
-		{"asked in round 1 only: one pass is not two", [2]*QuizShot{pass, nil}, RoundDecisions{}, callRefuse},
-		{"asked in round 2 only: one pass is not two", [2]*QuizShot{nil, pass}, RoundDecisions{}, callRefuse},
-		{"a round the prober skipped is not a pass", [2]*QuizShot{sh(OutcomeSkipped, ""), pass}, RoundDecisions{}, callRefuse},
-		{"only the prober's own failure", [2]*QuizShot{sh(OutcomeSkipped, ""), nil}, RoundDecisions{}, callNone},
-		{"never asked", [2]*QuizShot{nil, nil}, RoundDecisions{}, callNone},
-		{"a result still to come", [2]*QuizShot{pass, sh(OutcomeSubmitted, "")}, RoundDecisions{}, callWait},
-		{"a lost round decides even with another in the air", [2]*QuizShot{sh(OutcomeAnswered, VerdictFail), sh(OutcomeSubmitted, "")}, RoundDecisions{}, callRefuse},
-		{"a sentence round lost", [2]*QuizShot{pass, pass}, RoundDecisions{Round1: DecisionWin, Round2: DecisionLose}, callRefuse},
-		{"sentence rounds that were not judged", [2]*QuizShot{pass, pass}, RoundDecisions{Round1: DecisionSkip, Round2: DecisionSkip}, callIssue},
-		{"a sentence round lost but the quiz not asked", [2]*QuizShot{nil, nil}, RoundDecisions{Round1: DecisionLose}, callNone},
+		{"both rounds passed", [2]*QuizShot{pass, pass}, callIssue},
+		{"the first round wrong", [2]*QuizShot{sh(OutcomeAnswered, VerdictFail), pass}, callRefuse},
+		{"the second round wrong", [2]*QuizShot{pass, sh(OutcomeAnswered, VerdictFail)}, callRefuse},
+		{"an answer cut off is not a pass", [2]*QuizShot{pass, sh(OutcomeAnswered, VerdictTruncated)}, callRefuse},
+		{"no answer in time", [2]*QuizShot{pass, sh(OutcomeTimeout, "")}, callRefuse},
+		{"refused", [2]*QuizShot{sh(OutcomeRefused, ""), pass}, callRefuse},
+		{"queue full", [2]*QuizShot{pass, sh(OutcomeQueueFull, "")}, callRefuse},
+		{"asked in round 1 only: one pass is not two", [2]*QuizShot{pass, nil}, callRefuse},
+		{"asked in round 2 only: one pass is not two", [2]*QuizShot{nil, pass}, callRefuse},
+		{"a round the prober skipped is not a pass", [2]*QuizShot{sh(OutcomeSkipped, ""), pass}, callRefuse},
+		{"only the prober's own failure", [2]*QuizShot{sh(OutcomeSkipped, ""), nil}, callNone},
+		{"never asked", [2]*QuizShot{nil, nil}, callNone},
+		{"a result still to come", [2]*QuizShot{pass, sh(OutcomeSubmitted, "")}, callWait},
+		{"a lost round decides even with another in the air", [2]*QuizShot{sh(OutcomeAnswered, VerdictFail), sh(OutcomeSubmitted, "")}, callRefuse},
 	}
 	for _, c := range cases {
-		got, why := decideTicket(c.r, c.d)
+		got, why := decideTicket(c.r)
 		if got != c.want {
 			t.Errorf("%s: call %d (%q), want %d", c.name, got, why, c.want)
 		}
@@ -228,82 +224,6 @@ func TestSettleWaitsForAResultStillComing(t *testing.T) {
 	}
 	if settled, _ := p.store.SettledTickets(compareEpoch); settled[p.targets[0].Node.ID] {
 		t.Error("a node with a shot in the air was recorded as decided")
-	}
-}
-
-// 🔴 The sentence rounds are judged before anyone is settled on them, and a node
-// that lost one gets nothing however well it did at the quiz.
-func TestSettleNeedsTheSentenceRoundsToo(t *testing.T) {
-	p := compareProber(t, 5)
-	var issued []string
-	issuedBy(p, &issued)
-	start := compareSlotStart()
-
-	quizBoth(t, p, 0, 1, 2, 3, 4)
-	// Round 1: node 4 is the odd one out. Round 2: node 3 is.
-	compareRound(t, p, 1, "a1", "a1", "a1", "a1", "b1")
-	compareRound(t, p, 2, "a2", "a2", "a2", "b2", "a2")
-
-	// Not judged yet: the quiz alone is not enough to pay anybody.
-	p.settleTickets(start.Add(2*time.Hour + 31*time.Minute))
-	if len(issued) != 0 {
-		t.Fatalf("settled before the sentence rounds were judged: %v", issued)
-	}
-
-	at := start.Add(2*time.Hour + 32*time.Minute)
-	p.judgeRounds(at)
-	p.settleTickets(at)
-	if got, want := sortedIDs(issued), nodeIDs(p, 0, 1, 2); got != want {
-		t.Fatalf("issued %v, want the 3 that lost no sentence round", issued)
-	}
-	if tally, _ := p.store.CompareStats(p.targets[4].Node.ID, start.Add(-time.Hour)); tally.Lose != 1 {
-		t.Errorf("the lost round was not recorded: %+v", tally)
-	}
-}
-
-// A silent member loses a sentence round that is judged, and a round too small or
-// too split to judge pays everybody.
-func TestSettleSentenceSilenceLosesAndUnjudgedRoundsPayEveryone(t *testing.T) {
-	p := compareProber(t, 4)
-	var issued []string
-	issuedBy(p, &issued)
-	quizBoth(t, p, 0, 1, 2, 3)
-	compareRound(t, p, 1, "a", "a", "a", "") // node 3 did not answer
-	compareRound(t, p, 2, "a", "a", "a", "a")
-	at := settleAt()
-	p.judgeRounds(at)
-	p.settleTickets(at)
-	if got, want := sortedIDs(issued), nodeIDs(p, 0, 1, 2); got != want {
-		t.Errorf("issued %v, want the three that answered", issued)
-	}
-
-	q := compareProber(t, 4)
-	var all []string
-	issuedBy(q, &all)
-	quizBoth(t, q, 0, 1, 2, 3)
-	compareRound(t, q, 1, "a", "b", "", "") // only two answered
-	compareRound(t, q, 2, "a", "a", "b", "b")
-	q.judgeRounds(at)
-	q.settleTickets(at)
-	if len(all) != 4 {
-		t.Errorf("issued %d tickets, want all 4: %v", len(all), all)
-	}
-}
-
-// The switch stops the sentence rounds, not the quiz: a ticket is still settled
-// on the quiz alone.
-func TestSettleWithTheCheckSwitchedOff(t *testing.T) {
-	p := compareProber(t, 3)
-	p.cfg.NoCompare = true
-	var issued []string
-	issuedBy(p, &issued)
-	quizBoth(t, p, 0, 1, 2)
-	compareRound(t, p, 1, "a", "a", "b") // would be open, and would cost node 2 its ticket
-
-	p.judgeRounds(settleAt())
-	p.settleTickets(settleAt())
-	if len(issued) != 3 {
-		t.Errorf("issued %v, want all three on the quiz alone", issued)
 	}
 }
 

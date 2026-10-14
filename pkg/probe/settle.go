@@ -3,13 +3,20 @@ package probe
 // settle.go: deciding a slot's tickets.
 //
 // A ticket is the receipt for a slot, and nothing is issued while a slot is still
-// asking. Once the second sampling window is over (sample.go) and the sentence
-// rounds are judged (compare.go), every node the slot asked is decided at once:
+// asking. Once the second sampling window is over (sample.go), every node the slot
+// asked is decided at once, by how its group is checked (refcheck.go):
 //
-//	quiz      asked in each sampling window (quiz.go). A ticket needs the quiz
-//	          passed in BOTH rounds.
-//	sentence  for a node in a group of nodes running the same model, its answer in
-//	          each sentence round must not have lost (compare.go).
+//	quiz       asked in each sampling window (quiz.go). A ticket needs the quiz
+//	           passed in BOTH rounds.
+//	ref, cache the reference check in each sampling window (refcheck.go). A ticket
+//	           needs it passed in BOTH rounds; a reference node, its answers
+//	           agreeing with the other references in both.
+//	unlisted   the budget's check info does not list the node's GPU: no ticket.
+//
+// The ticket then names the group's budget (ticketFor). The majority sentence
+// check between nodes is gone (2026-10-14): copies of one fake could out-vote
+// the honest nodes, and the reference nodes are the measure now (probe.md
+// 「쓰지 않는 방식」).
 //
 // 🔴 TWO PASSES, OR NO TICKET. A round the node was asked in and did not pass is
 // lost, whatever the reason (wrong, cut off, refused, busy, no answer inside its
@@ -20,9 +27,6 @@ package probe
 // prober was down for a whole window, when the node was not in the directory
 // during one, or when the prober's own shot failed (OutcomeSkipped). A node that
 // was not asked at all in either round has nothing to decide.
-//
-// The sentence rounds are the other way round: one the node was not asked in is
-// not held against it, because it only ever decides a loss.
 //
 // WHEN. From a minute after the second window closes until the slot ends, on every
 // tick, so a node whose last result came in late is decided on the next one. A
@@ -80,9 +84,9 @@ func quizSummary(r [2]*QuizShot) string {
 	return fmt.Sprintf("round 1 %s, round 2 %s", quizLabel(r[0]), quizLabel(r[1]))
 }
 
-// decideTicket turns a node's two quiz rounds and its sentence decisions into a
-// call. The string says why, for a refusal.
-func decideTicket(rounds [2]*QuizShot, d RoundDecisions) (ticketCall, string) {
+// decideTicket turns a node's two quiz rounds into a call. The string says why,
+// for a refusal.
+func decideTicket(rounds [2]*QuizShot) (ticketCall, string) {
 	passed, pending, lost := 0, false, false
 	for _, r := range rounds {
 		switch {
@@ -107,9 +111,6 @@ func decideTicket(rounds [2]*QuizShot, d RoundDecisions) (ticketCall, string) {
 	}
 	if passed < 2 {
 		return callRefuse, "quiz passed in one round only (" + quizSummary(rounds) + ")"
-	}
-	if d.Round1 == DecisionLose || d.Round2 == DecisionLose {
-		return callRefuse, fmt.Sprintf("model check failed (sentence round 1 %s, round 2 %s)", orDash(d.Round1), orDash(d.Round2))
 	}
 	return callIssue, ""
 }
@@ -140,36 +141,23 @@ func (p *Prober) settleTickets(now time.Time) {
 	}
 	epoch := p.assign.Epoch
 
-	// The sentence rounds are judged before anyone is settled on them.
-	if !p.cfg.NoCompare {
-		for round := 1; round <= 2; round++ {
-			open, err := p.store.OpenCompare(epoch, round)
-			if err != nil {
-				log.Printf("[probe] settle: open rows: %v", err)
-				return
-			}
-			if len(open) > 0 {
-				return
-			}
-		}
-	}
-
 	shots, err := p.store.QuizShots(epoch)
 	if err != nil {
 		log.Printf("[probe] settle: quiz shots: %v", err)
 		return
 	}
-	if len(shots) == 0 {
+	refRows, err := p.store.RefRows(epoch)
+	if err != nil {
+		log.Printf("[probe] settle: reference checks: %v", err)
+		return
+	}
+	planned := p.assign.Planned()
+	if len(shots) == 0 && len(refRows) == 0 && !planned {
 		return
 	}
 	settled, err := p.store.SettledTickets(epoch)
 	if err != nil {
 		log.Printf("[probe] settle: settled tickets: %v", err)
-		return
-	}
-	decisions, err := p.store.CompareDecisions(epoch)
-	if err != nil {
-		log.Printf("[probe] settle: decisions: %v", err)
 		return
 	}
 
@@ -189,6 +177,26 @@ func (p *Prober) settleTickets(now time.Time) {
 		}
 		if r[s.Round-1] == nil {
 			r[s.Round-1] = s
+		}
+	}
+	in := map[string]bool{}
+	for _, id := range ids {
+		in[id] = true
+	}
+	for id := range refRows {
+		if !in[id] {
+			in[id] = true
+			ids = append(ids, id)
+		}
+	}
+	// A node of an unlisted GPU is never asked, and is settled here once so the
+	// log says why it earns nothing.
+	if planned {
+		for _, t := range p.targets {
+			if _, mode := p.modeOf(nodeAddressOf(t.Node.ID)); mode == ModeUnlisted && !in[t.Node.ID] {
+				in[t.Node.ID] = true
+				ids = append(ids, t.Node.ID)
+			}
 		}
 	}
 	sort.Strings(ids)
@@ -223,14 +231,33 @@ func (p *Prober) settleTickets(now time.Time) {
 			log.Printf("[probe] settle: the slot ended with tickets still to sign")
 			break
 		}
-		rounds := *byNode[id]
-		call, why := decideTicket(rounds, decisions[id])
+		var rounds [2]*QuizShot
+		if r := byNode[id]; r != nil {
+			rounds = *r
+		}
+		g, mode := p.modeOf(nodeAddressOf(id))
+		var (
+			call ticketCall
+			why  string
+		)
+		switch mode {
+		case ModeUnlisted:
+			call, why = callRefuse, "its GPU is not in the budget's check info"
+		case ModeRef, ModeCache:
+			call, why = decideRef(refRows[id])
+		default:
+			call, why = decideTicket(rounds)
+		}
 		switch call {
 		case callWait, callNone:
 			continue
 		case callRefuse:
 			t := targets[id]
-			record(id, firstService(rounds), t.Slash24, "", DecisionLose)
+			svc := firstService(rounds)
+			if svc == "" {
+				svc = t.Service.Name
+			}
+			record(id, svc, t.Slash24, "", DecisionLose)
 			log.Printf("[probe] %s: no ticket this slot: %s", short(id), why)
 			refused++
 		case callIssue:
@@ -239,17 +266,26 @@ func (p *Prober) settleTickets(now time.Time) {
 				gone++
 				continue
 			}
+			t = onModel(t, g)
 			// The ticket names the model the directory reports now. It has to be the
 			// one the node was asked on in every round, or the quiz was answered on a
 			// different model from the one being paid.
-			if was, shifted := modelShifted(rounds, t.Service.ModelHash); shifted {
+			if was, shifted := modelShifted(rounds, t.Service.ModelHash); mode == ModeQuiz && shifted {
 				record(id, t.Service.Name, t.Slash24, "", DecisionLose)
 				log.Printf("[probe] %s: no ticket this slot: its model changed during the slot (%s, now %s)",
 					short(id), shortModel(was), shortModel(t.Service.ModelHash))
 				refused++
 				continue
 			}
-			model, _, _, _ := p.nodeTicketBudget(t)
+			model, _, _, write, nowhy := p.ticketFor(t)
+			if !write {
+				record(id, t.Service.Name, t.Slash24, "", DecisionLose)
+				if nowhy != "" {
+					log.Printf("[probe] %s: no ticket this slot: %s", short(id), nowhy)
+				}
+				refused++
+				continue
+			}
 			p.emitTicket(t, now, faucet.KindText)
 			record(id, t.Service.Name, t.Slash24, model, DecisionWin)
 			p.noteTicket(id, VerdictPass, now)

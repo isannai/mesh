@@ -44,6 +44,53 @@ type AssignGroup struct {
 	// the slot holds ONE group — the leaf is then the root already, and an
 	// empty path is the correct proof rather than a missing one.
 	Path []string `json:"path"`
+
+	// What the group is checked against, from an RV that groups by budget
+	// registration (2026-10-14, workspace docs/todo/probe-기준노드.md 3절). All
+	// empty from an older RV, which means the old checks (Planned).
+	//
+	//	BudgetID  the budget that pays the group: the one its nodes registered in,
+	//	          or the system budget. 0 when no system budget is active.
+	//	Model     that budget's model hash; empty for the system budget
+	//	GPU       the GPU name the group was cut by
+	//	Mode      ref | cache | quiz | unlisted (refcheck.go)
+	//	Refs      the reference nodes in Members
+	//	MetaHash, Engine, Profile  the settings stored questions are keyed by
+	BudgetID uint64   `json:"budget_id,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	GPU      string   `json:"gpu,omitempty"`
+	Mode     string   `json:"mode,omitempty"`
+	Refs     []string `json:"refs,omitempty"`
+	MetaHash string   `json:"meta_hash,omitempty"`
+	Engine   string   `json:"engine,omitempty"`
+	Profile  string   `json:"profile,omitempty"`
+}
+
+// The group check modes (the RV's faucet_plan.go).
+const (
+	ModeRef      = "ref"      // reference nodes are in the group: ask them first
+	ModeCache    = "cache"    // its references are all offline: reuse stored questions
+	ModeQuiz     = "quiz"     // no reference: the quiz
+	ModeUnlisted = "unlisted" // the GPU is not in the budget's check info: no ticket
+)
+
+// IsRef reports whether addr is one of this group's reference nodes.
+func (g AssignGroup) IsRef(addr string) bool {
+	for _, r := range g.Refs {
+		if strings.EqualFold(strings.TrimSpace(r), addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckMode is how a node of this group is checked: quiz for a group from an
+// older RV, which names no mode.
+func (g AssignGroup) CheckMode() string {
+	if g.Mode == "" {
+		return ModeQuiz
+	}
+	return g.Mode
 }
 
 // Assignment is one slot as the RV renders it.
@@ -84,6 +131,17 @@ func (a Assignment) GroupOf(addr string) int {
 		}
 	}
 	return -1
+}
+
+// Planned reports whether the RV grouped this slot by budget registration. Then
+// the group, not the node's model hash, decides which budget a ticket names.
+func (a Assignment) Planned() bool {
+	for _, g := range a.Groups {
+		if g.Mode != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Stale reports whether this assignment has outlived its slot.

@@ -65,6 +65,11 @@ func (p *Prober) dueQuiz(now time.Time, round int, asked map[string]int) []Targe
 		if asked[t.Node.ID] > 0 {
 			continue
 		}
+		// A group with references is checked by them (refcheck.go), and an
+		// unlisted GPU is not checked at all: only quiz groups get the quiz.
+		if _, mode := p.modeOf(nodeAddressOf(t.Node.ID)); mode != ModeQuiz {
+			continue
+		}
 		at := start.Add(w[0]).Add(p.sampleOffset("quiz", round, slash24Key(t), w[1]-w[0]))
 		if now.Before(at) {
 			continue

@@ -199,6 +199,9 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("probe db schema: %w", err)
 	}
+	if _, err := s.db.Exec(refSchema); err != nil {
+		return fmt.Errorf("probe db reference tables: %w", err)
+	}
 	for _, stmt := range addedColumns {
 		_, _ = s.db.Exec(stmt)
 	}

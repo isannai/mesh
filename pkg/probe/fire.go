@@ -75,6 +75,9 @@ type Firer struct {
 
 	mu      sync.Mutex
 	schemas map[string]*manifest.RunSpec // "<nodeID>|<svc>" → run schema
+	// probeRuns is each node service's run that returns candidates, nil when it
+	// has none (probprobs.go).
+	probeRuns map[string]*manifest.RunSpec
 }
 
 // NewFirer builds a Firer. The client carries no timeout of its own; each call
@@ -260,12 +263,22 @@ func (f *Firer) SubmitRun(nodeID, svc string, run map[string]any) (SubmitResult,
 // is this prober asking a friend for work and proves nothing. Threading an
 // empty string through the ally paths would invite someone to fill it in.
 func (f *Firer) SubmitRunProbe(nodeID, svc string, run map[string]any, probe string) (SubmitResult, error) {
-	payload, err := json.Marshal(map[string]any{"service": svc, "run": run})
+	return f.submitJob(nodeID, svc, "", run, probe)
+}
+
+// submitJob posts a run block to one node's service. path picks a run variant
+// by its engine path (the station's RunFor); "" is the default run.
+func (f *Firer) submitJob(nodeID, svc, path string, run map[string]any, probe string) (SubmitResult, error) {
+	body := map[string]any{"service": svc, "run": run}
+	if path != "" {
+		body["path"] = path
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return SubmitResult{Outcome: OutcomeRefused}, err
 	}
 	endpoint := f.nodeBase(nodeID) + "/svc/" + url.PathEscape(svc) + "/v1/jobs"
-	body, code, err := f.post(endpoint, payload, 30*time.Second, probe)
+	reply, code, err := f.post(endpoint, payload, 30*time.Second, probe)
 	if err != nil {
 		return SubmitResult{Outcome: OutcomeRefused}, err
 	}
@@ -282,7 +295,7 @@ func (f *Firer) SubmitRunProbe(nodeID, svc string, run map[string]any, probe str
 		JobID    string `json:"job_id"`
 		QueueMax int    `json:"queue_max"`
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
+	if err := json.Unmarshal(reply, &resp); err != nil {
 		return SubmitResult{Status: code, Outcome: OutcomeRefused}, fmt.Errorf("parse submit reply: %w", err)
 	}
 	if resp.JobID == "" {
@@ -306,6 +319,16 @@ type FetchResult struct {
 // would penalise the larger machine for being larger.
 func (f *Firer) Collect(nodeID, jobID string, deadline time.Duration) (FetchResult, error) {
 	base := f.nodeBase(nodeID)
+	outcome, err := f.await(base, jobID, deadline)
+	if outcome != OutcomeAnswered {
+		return FetchResult{Outcome: outcome}, err
+	}
+	return f.result(base, jobID)
+}
+
+// await polls a job until it is done (OutcomeAnswered), failed (OutcomeRefused
+// with the node's error) or past the deadline (OutcomeTimeout).
+func (f *Firer) await(base, jobID string, deadline time.Duration) (string, error) {
 	stop := time.Now().Add(deadline)
 
 	// Same backoff shape as the CLI's poll (cmd/isann/infer.go): quick at
@@ -317,30 +340,30 @@ func (f *Firer) Collect(nodeID, jobID string, deadline time.Duration) (FetchResu
 	for {
 		body, code, err := f.get(base+"/v1/jobs/"+url.PathEscape(jobID), 15*time.Second)
 		if err != nil {
-			return FetchResult{Outcome: OutcomeRefused}, err
+			return OutcomeRefused, err
 		}
 		if code != http.StatusOK {
-			return FetchResult{Outcome: OutcomeRefused}, fmt.Errorf("job status: HTTP %d", code)
+			return OutcomeRefused, fmt.Errorf("job status: HTTP %d", code)
 		}
 		var st struct {
 			Status string `json:"status"`
 			Error  string `json:"error"`
 		}
 		if err := json.Unmarshal(body, &st); err != nil {
-			return FetchResult{Outcome: OutcomeRefused}, fmt.Errorf("parse job status: %w", err)
+			return OutcomeRefused, fmt.Errorf("parse job status: %w", err)
 		}
 
 		switch st.Status {
 		case "done":
-			return f.result(base, jobID)
+			return OutcomeAnswered, nil
 		case "failed":
 			// The node ran and could not finish. That is the node's answer,
 			// not a transport problem, so it is recorded rather than retried.
-			return FetchResult{Outcome: OutcomeRefused}, fmt.Errorf("job failed: %s", st.Error)
+			return OutcomeRefused, fmt.Errorf("job failed: %s", st.Error)
 		}
 
 		if time.Now().After(stop) {
-			return FetchResult{Outcome: OutcomeTimeout}, nil
+			return OutcomeTimeout, nil
 		}
 		time.Sleep(wait)
 		if wait < maxWait {

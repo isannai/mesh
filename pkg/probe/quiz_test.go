@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -315,21 +314,13 @@ func TestDueQuizServesTheLongestWaitingFirst(t *testing.T) {
 	}
 }
 
-// 🔴 A group of four on one model through a whole slot: the quiz and the sentence
-// request both go out in each window, nothing is issued until the second window is
-// over, and the node whose sentence differs from the group's gets nothing although
-// it passed the quiz both times.
+// 🔴 A group of four from an RV that does not group by budget, through a whole
+// slot: the quiz goes out in each window, nothing is issued until the second
+// window is over, and then every node that passed both rounds is paid. No sentence
+// request goes out any more: the majority check between nodes was dropped
+// (2026-10-14, compare.go).
 func TestAGroupThroughAWholeSlot(t *testing.T) {
-	odd := fmt.Sprintf("%040x", 4)
-	node := &compareNode{byPrompt: func(id, prompt string) string {
-		if !strings.Contains(prompt, "Write one short sentence") {
-			return "2" // the quiz
-		}
-		if strings.HasSuffix(id, odd) {
-			return "an answer from some other model"
-		}
-		return "the lighthouse stood alone"
-	}}
+	node := &compareNode{byPrompt: func(id, prompt string) string { return "2" }}
 	srv := httptest.NewServer(node)
 	defer srv.Close()
 
@@ -352,39 +343,19 @@ func TestAGroupThroughAWholeSlot(t *testing.T) {
 	if len(quiz) != 8 {
 		t.Fatalf("%d quiz shots, want 4 nodes in 2 rounds", len(quiz))
 	}
-	for _, r := range []int{1, 2} {
-		var n int
-		if err := p.store.db.QueryRow(`SELECT COUNT(*) FROM compare WHERE epoch = ? AND round = ?`,
-			compareEpoch, r).Scan(&n); err != nil || n != 4 {
-			t.Fatalf("sentence round %d has %d answers, %v, want 4", r, n, err)
-		}
-	}
-	// Round 1 was judged when its window had closed, round 2 is still open.
-	if open, _ := p.store.OpenCompare(compareEpoch, 1); len(open) != 0 {
-		t.Errorf("round 1 still open: %d rows", len(open))
-	}
-	if open, _ := p.store.OpenCompare(compareEpoch, 2); len(open) != 4 {
-		t.Errorf("round 2 has %d open rows, want 4", len(open))
-	}
-	if len(node.prompts) != 16 {
-		t.Errorf("%d requests went out, want 8 quiz and 8 sentence", len(node.prompts))
+	if len(node.prompts) != 8 {
+		t.Errorf("%d requests went out, want the 8 quiz questions only", len(node.prompts))
 	}
 	if len(issued) != 0 {
 		t.Fatalf("issued before the slot was settled: %v", issued)
 	}
 
 	p.fireRoundAt(start.Add(2*time.Hour + 31*time.Minute))
-	if got, want := sortedIDs(issued), nodeIDs(p, 0, 1, 2); got != want {
-		t.Fatalf("issued %v, want the three whose sentences agreed", issued)
-	}
-	if settled, _ := p.store.SettledTickets(compareEpoch); len(settled) != 4 {
-		t.Errorf("%d nodes decided, want all 4 (three paid, one refused)", len(settled))
-	}
-	if tally, _ := p.store.CompareStats(p.targets[3].Node.ID, time.Now().Add(-time.Hour)); tally.Lose != 2 { // asked_at is the real clock
-		t.Errorf("the odd node lost %d sentence rounds, want 2", tally.Lose)
+	if got, want := sortedIDs(issued), nodeIDs(p, 0, 1, 2, 3); got != want {
+		t.Fatalf("issued %v, want all four", issued)
 	}
 	p.fireRoundAt(start.Add(2*time.Hour + 32*time.Minute))
-	if len(issued) != 3 {
+	if len(issued) != 4 {
 		t.Errorf("a later tick issued more: %v", issued)
 	}
 }

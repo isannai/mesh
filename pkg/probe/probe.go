@@ -207,11 +207,13 @@ type Config struct {
 	// eventual "was this node public all day" rule reads them, so it outlives
 	// the 15-day claim window.
 	ObservationDays int `json:"observation_days"`
-	// NoCompare switches the model-identity check off (compare.go): no sentence
-	// request is sent, and a ticket is settled on the quiz alone, whatever else runs
-	// the same model in the node's group. It is an emergency switch, not a setting
-	// to leave on.
-	NoCompare bool `json:"no_compare"`
+	// RefTolerance is the largest gap allowed between a node's candidate
+	// probability and the reference value in the reference check (refcheck.go).
+	// 0 means DefaultRefTolerance (0.001, probe.md 「판정」); to be set by measurement.
+	RefTolerance float64 `json:"ref_tolerance"`
+	// RefMaxMisses is how many candidates may exceed RefTolerance in one answer
+	// and still pass. 0 (the proposal) until measurement says otherwise.
+	RefMaxMisses int `json:"ref_max_misses"`
 	// QuestionFanout is how many nodes are asked the SAME question in one
 	// round — always in different /24s (see FireRound).
 	//
@@ -587,6 +589,13 @@ type Prober struct {
 	// prober stops asking every hour: an engine that is not there will not be
 	// there next hour either, and the log line is the same one every time.
 	genFailures atomic.Int32
+
+	// refMu guards the reference check's slot bookkeeping (refcheck.go): the
+	// stored questions handed out per group and round (refUsed), and the groups
+	// whose references got their own question this round (refAsked).
+	refMu    sync.Mutex
+	refUsed  map[string]map[int64]bool
+	refAsked map[string]bool
 }
 
 // roundStats tallies one firing round for the summary line.
@@ -1017,6 +1026,16 @@ func (p *Prober) prune(now time.Time) {
 	} else if n > 0 {
 		log.Printf("[probe] pruned %d shots", n)
 	}
+	// The reference check keeps its questions and rows 15 days (refcheck.go),
+	// whatever ObservationDays says: that is the design's retention.
+	if n, err := p.store.PruneRefCache(now.Add(-refKeep)); err != nil {
+		log.Printf("[probe] prune stored questions: %v", err)
+	} else if n > 0 {
+		log.Printf("[probe] pruned %d stored questions", n)
+	}
+	if _, err := p.store.PruneRefChecks(now.Add(-refKeep)); err != nil {
+		log.Printf("[probe] prune reference checks: %v", err)
+	}
 }
 
 // FireRound fires this round's share of the slot's work: the quiz, if the clock
@@ -1099,10 +1118,8 @@ func (p *Prober) fireRoundAt(now time.Time) {
 		return
 	}
 
-	// The model-identity check (compare.go) judges a sampling round once its
-	// window has closed, and the slot's tickets are settled once both are over
+	// The slot's tickets are settled once both sampling windows are over
 	// (settle.go). Nothing is issued anywhere else.
-	p.judgeRounds(now)
 	p.settleTickets(now)
 
 	// Counted for THIS SLOT, not this day. The slot is the unit a ticket is
@@ -1140,9 +1157,9 @@ func (p *Prober) fireRoundAt(now time.Time) {
 	// does for nothing (quiz.go).
 	p.claimTextNodes(counts)
 
-	// The sentence requests of the model-identity check go out in their own two
-	// windows, whatever the quiz is doing (compare.go).
-	p.fireCompare(now)
+	// The reference check of groups that have references (refcheck.go), in the
+	// same two windows. The quiz above skips those groups.
+	p.fireRefChecks(now)
 
 	p.fireImageRound(now, counts, &stats)
 }

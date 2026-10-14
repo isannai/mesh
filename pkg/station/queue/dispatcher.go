@@ -100,7 +100,10 @@ func MakeManagedProcess(svc setup.ServiceEntry, opts DispatchOptions) ProcessFun
 		// worker reassembles a full response for buffered clients (/result,
 		// wait=true) while streaming clients poll /chunk. Non-streamable engines
 		// (sd/image) stay buffered. See docs/bugs …stream-stall.md §3-3.
-		internalStream := opts.StreamPath != ""
+		//
+		// Except a job that must come back as the engine gave it (bufferedJob):
+		// the reassembly keeps the text and the last chunk only.
+		internalStream := opts.StreamPath != "" && !bufferedJob(job)
 
 		reqCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -285,6 +288,38 @@ func isCompletions(path string) bool { return path == "/v1/completions" }
 // buffered clients. Non-object / unparseable bodies are returned unchanged.
 // Mirrors the station handler's ensureStreamFlag (kept local to avoid an import
 // cycle). See docs/bugs …stream-stall.md §3-3.
+// bufferedJob reports a job the worker must NOT turn into a stream.
+//
+//   - It asks for per-token candidate probabilities (llama.cpp n_probs, OpenAI
+//     logprobs). The faucet prober compares them with its reference nodes
+//     (workspace docs/todo/probe-기준노드.md 4절), and a reassembled stream keeps
+//     only the last chunk's, so every earlier token's would be lost.
+//   - It calls llama.cpp's own /completion, whose chunks carry the text at
+//     "content" rather than at the service's stream path: reassembled, the
+//     answer would come back empty.
+//
+// Such jobs are short (the prober asks for 8 tokens), so a buffered job's total
+// deadline costs nothing.
+func bufferedJob(job *Job) bool {
+	if job.Path == "/completion" {
+		return true
+	}
+	var m map[string]any
+	if json.Unmarshal(job.RequestBody, &m) != nil {
+		return false
+	}
+	if n, ok := m["n_probs"].(float64); ok && n > 0 {
+		return true
+	}
+	switch v := m["logprobs"].(type) {
+	case bool:
+		return v
+	case float64:
+		return v > 0
+	}
+	return false
+}
+
 func forceStreamFlag(body []byte) []byte {
 	var m map[string]any
 	if len(body) > 0 {

@@ -337,6 +337,35 @@ func (p *Prober) nodeModelLocked(svcs []rvnodes.Service) string {
 	return best
 }
 
+// ticketFor is what a ticket for t carries, whether to write one, and why not.
+//
+// From an RV that groups by budget registration (Assignment.Planned), the node's
+// group decides, not the node's model hash: the group's budget is the one its
+// owner registered in, or the system budget. A model budget's ticket names that
+// budget and its model, and the node must be running it. A system group's ticket
+// is plain (the RV pays it from the system budget). From an older RV, the choice
+// by model hash below (nodeTicketBudget).
+func (p *Prober) ticketFor(t Target) (model, params, budgetID string, write bool, why string) {
+	if !p.hasAssign || !p.assign.Planned() {
+		model, params, budgetID, write = p.nodeTicketBudget(t)
+		return model, params, budgetID, write, ""
+	}
+	g, mode := p.modeOf(nodeAddressOf(t.Node.ID))
+	switch {
+	case mode == ModeUnlisted:
+		return "", "", "", false, "its GPU is not in the budget's check info"
+	case g.BudgetID == 0:
+		return "", "", "", false, "no system budget is active"
+	case g.Model == "":
+		return "", "", "", true, ""
+	}
+	want := strings.ToLower(strings.TrimSpace(g.Model))
+	if m, err := faucet.ModelFromReport(t.Service.ModelHash); err != nil || m != want {
+		return "", "", "", false, fmt.Sprintf("it does not run the model of budget %d", g.BudgetID)
+	}
+	return want, ticketParams(t.Service.ModelClass), strconv.FormatUint(g.BudgetID, 10), true, ""
+}
+
 // budgetSummary is the directory log's note on the budgets: how many model
 // budgets are live and how many targets run one of them. "" before it was ever
 // read.
