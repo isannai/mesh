@@ -121,7 +121,7 @@ func (s *Store) RecordRefEval(r RefRow) error {
 }
 
 // RefRows returns the slot's rows, by node then round.
-func (s *Store) RefRows(epoch int64) (map[string][2]*RefRow, error) {
+func (s *Store) RefRows(epoch int64) (map[string][SampleRounds]*RefRow, error) {
 	rows, err := s.db.Query(`
 		SELECT node_id, round, group_idx, role, mode, attempts, asked_at, outcome, verdict, reason, COALESCE(detail,''), cached
 		  FROM refcheck WHERE epoch = ?`, epoch)
@@ -129,7 +129,7 @@ func (s *Store) RefRows(epoch int64) (map[string][2]*RefRow, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string][2]*RefRow{}
+	out := map[string][SampleRounds]*RefRow{}
 	for rows.Next() {
 		r := RefRow{Epoch: epoch}
 		var at int64
@@ -138,13 +138,13 @@ func (s *Store) RefRows(epoch int64) (map[string][2]*RefRow, error) {
 			&r.Outcome, &r.Verdict, &r.Reason, &r.Detail, &cached); err != nil {
 			return nil, err
 		}
-		if r.Round < 1 || r.Round > 2 {
+		if r.Round < 1 || r.Round > SampleRounds {
 			continue
 		}
 		r.AskedAt, r.Cached = time.UnixMilli(at), cached == 1
-		pair := out[r.NodeID]
-		pair[r.Round-1] = &r
-		out[r.NodeID] = pair
+		byRound := out[r.NodeID]
+		byRound[r.Round-1] = &r
+		out[r.NodeID] = byRound
 	}
 	return out, rows.Err()
 }

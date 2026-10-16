@@ -752,33 +752,30 @@ func (p *Prober) modeOf(addr string) (AssignGroup, string) {
 	return g, g.CheckMode()
 }
 
-// decideRef turns a node's two reference-check rounds into a call, like
-// decideTicket does for the quiz: both rounds passed, or no ticket.
-func decideRef(rounds [2]*RefRow) (ticketCall, string) {
-	passed, pending := 0, false
+// decideRef turns a node's reference-check rounds into a call, like decideTicket
+// does for the quiz: need of the rounds passed, or no ticket.
+func decideRef(rounds [SampleRounds]*RefRow, need int) (ticketCall, string) {
+	passed, pending, failed := 0, 0, 0
 	var lost []string
 	for i, r := range rounds {
 		switch {
 		case r == nil:
 		case r.Verdict == "":
-			pending = true
+			pending++
 		case r.Verdict == VerdictPass:
 			passed++
 		default:
+			failed++
 			lost = append(lost, fmt.Sprintf("round %d %s", i+1, r.Reason))
 		}
 	}
+	call := callFor(passed, pending, failed, need)
+	if call != callRefuse {
+		return call, ""
+	}
 	if len(lost) > 0 {
-		return callRefuse, "reference check failed (" + strings.Join(lost, ", ") + ")"
+		return call, fmt.Sprintf("reference check passed %d of %d rounds, needs %d (%s)",
+			passed, SampleRounds, need, strings.Join(lost, ", "))
 	}
-	if pending {
-		return callWait, ""
-	}
-	if passed == 0 {
-		return callNone, ""
-	}
-	if passed < 2 {
-		return callRefuse, "reference check passed in one round only"
-	}
-	return callIssue, ""
+	return call, fmt.Sprintf("reference check passed %d of %d rounds, needs %d", passed, SampleRounds, need)
 }

@@ -14,8 +14,8 @@ package probe
 // in step with anything: eight slots in a day, one ticket each.
 //
 // HOW MANY SHOTS A SLOT HOLDS. A picture is ordered once, at a time chosen below.
-// The text quiz is asked twice, once in each sampling window of the slot, and
-// both results go into the one ticket (sample.go, quiz.go, settle.go). The quiz
+// The text quiz is asked once in each sampling window of the slot, three of them, and
+// the results go into the one ticket (sample.go, quiz.go, settle.go). The quiz
 // does not use dueTargets; the picture track does.
 //
 // # WHY NOT AT THE SLOT BOUNDARY
@@ -140,7 +140,7 @@ func dueTargets(targets []Target, now time.Time, a Assignment, shotsInSlot map[s
 // presenceFrom totals how long each node has been up today.
 //
 // 🔴 NOT USED FOR FIRING. The schedule is the slot calendar now; this is kept
-// for `probe -report`, where "how much of the day was this node up" is a
+// for `probe --report`, where "how much of the day was this node up" is a
 // question an operator still asks. It stays here rather than moving to
 // report.go because the tolerance it encodes belongs with the observation
 // cadence, not with the rendering.

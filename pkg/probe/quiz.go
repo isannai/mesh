@@ -1,16 +1,17 @@
 package probe
 
-// quiz.go: the quiz, asked twice a slot.
+// quiz.go: the quiz, asked three times a slot.
 //
-// Every text node gets the quiz in BOTH sampling windows of a slot (sample.go):
-// 0:30 to 1:00 and 2:00 to 2:30 of a three hour slot, at a random moment inside
-// each. Nothing is issued when an answer comes back. The slot's tickets are
-// settled together once the second window is over (settle.go), and a node needs
-// both passes.
+// Every text node gets the quiz in EACH sampling window of a slot (sample.go):
+// 0:30 to 1:00, 1:15 to 1:45 and 2:00 to 2:30 of a three hour slot, at a random
+// moment inside each. Nothing is issued when an answer comes back. The slot's
+// tickets are settled together once the last window is over (settle.go), and a node
+// needs two of the three passes (Config.SamplePassMin).
 //
-// WHY TWICE. One shot at one moment shows a node was up then. Two, this far apart,
-// show it was up at both ends of the slot, and the moment of each is not known in
-// advance. It is also the same pattern the model-identity check follows
+// WHY THREE. One shot at one moment shows a node was up then. Three, this far apart,
+// show it was up across the slot, and the moment of each is not known in advance.
+// Needing two of them lets a node miss one, a busy moment or a restart, and still
+// be paid, where two shots with both required made a single miss cost the slot. It is also the same pattern the model-identity check follows
 // (compare.go), so a ticket always goes out at the same time, whatever else the
 // node is checked on.
 //
@@ -51,7 +52,7 @@ func slash24Key(t Target) string {
 // are different nodes every slot; taken in the order of their names, they would be
 // the same nodes every slot.
 func (p *Prober) dueQuiz(now time.Time, round int, asked map[string]int) []Target {
-	if round < 1 || round > 2 {
+	if round < 1 || round > SampleRounds {
 		return nil
 	}
 	start, win := p.sampleClock()

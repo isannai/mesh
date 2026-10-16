@@ -275,6 +275,7 @@ func TestRefGroupThroughAWholeSlot(t *testing.T) {
 	start := compareSlotStart()
 
 	p.fireRoundAt(start.Add(59*time.Minute + 50*time.Second))
+	p.fireRoundAt(start.Add(104*time.Minute + 50*time.Second))
 	p.fireRoundAt(start.Add(2*time.Hour + 29*time.Minute + 50*time.Second))
 
 	if quiz, _ := p.store.QuizShots(compareEpoch); len(quiz) != 0 {
@@ -289,11 +290,11 @@ func TestRefGroupThroughAWholeSlot(t *testing.T) {
 	ref := p.targets[0].Node.ID
 	// Questions: one each a round for the honest node, two each a round for the
 	// cheat (the second after a text mismatch), each also put to the reference.
-	if got := len(bridge.asked[honest]); got != 2 {
-		t.Errorf("the honest node was asked %d times, want 2", got)
+	if got := len(bridge.asked[honest]); got != SampleRounds {
+		t.Errorf("the honest node was asked %d times, want %d", got, SampleRounds)
 	}
-	if got := len(bridge.asked[cheat]); got != 4 {
-		t.Errorf("the cheat was asked %d times, want 4 (a retry each round)", got)
+	if got := len(bridge.asked[cheat]); got != 2*SampleRounds {
+		t.Errorf("the cheat was asked %d times, want %d (a retry each round)", got, 2*SampleRounds)
 	}
 	seen := map[string]bool{}
 	for _, q := range append(append([]string{}, bridge.asked[honest]...), bridge.asked[cheat]...) {
@@ -418,19 +419,25 @@ func TestRefCheckRefusals(t *testing.T) {
 
 func TestDecideRef(t *testing.T) {
 	row := func(v, reason string) *RefRow { return &RefRow{Verdict: v, Reason: reason} }
+	pass, fail, air := row(VerdictPass, ""), row(VerdictFail, reasonProbs), row("", "")
 	cases := []struct {
 		name string
-		r    [2]*RefRow
+		r    [SampleRounds]*RefRow
+		need int
 		want ticketCall
 	}{
-		{"both passed", [2]*RefRow{row(VerdictPass, ""), row(VerdictPass, "")}, callIssue},
-		{"one failed", [2]*RefRow{row(VerdictPass, ""), row(VerdictFail, reasonProbs)}, callRefuse},
-		{"one round only", [2]*RefRow{row(VerdictPass, ""), nil}, callRefuse},
-		{"in flight", [2]*RefRow{row(VerdictPass, ""), row("", "")}, callWait},
-		{"never asked", [2]*RefRow{nil, nil}, callNone},
+		{"every round passed", [SampleRounds]*RefRow{pass, pass, pass}, 2, callIssue},
+		{"one failed, two passed", [SampleRounds]*RefRow{pass, fail, pass}, 2, callIssue},
+		{"two failed", [SampleRounds]*RefRow{pass, fail, fail}, 2, callRefuse},
+		{"one round only", [SampleRounds]*RefRow{pass, nil, nil}, 2, callRefuse},
+		{"enough passed, one in flight", [SampleRounds]*RefRow{pass, pass, air}, 2, callIssue},
+		{"in flight could make it", [SampleRounds]*RefRow{pass, air, nil}, 2, callWait},
+		{"two failed and one in flight cannot make it", [SampleRounds]*RefRow{fail, fail, air}, 2, callRefuse},
+		{"never asked", [SampleRounds]*RefRow{nil, nil, nil}, 2, callNone},
+		{"all three needed, one failed", [SampleRounds]*RefRow{pass, pass, fail}, 3, callRefuse},
 	}
 	for _, c := range cases {
-		if got, why := decideRef(c.r); got != c.want || (got == callRefuse && why == "") {
+		if got, why := decideRef(c.r, c.need); got != c.want || (got == callRefuse && why == "") {
 			t.Errorf("%s: %d %q, want %d", c.name, got, why, c.want)
 		}
 	}

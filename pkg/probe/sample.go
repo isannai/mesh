@@ -1,22 +1,24 @@
 package probe
 
-// sample.go: the two moments of a slot at which a node is asked.
+// sample.go: the moments of a slot at which a node is asked.
 //
-// A node is asked twice in every slot, once in each SAMPLING WINDOW, at a random
-// moment inside it. The windows are the first and the last half hour of the
-// firing window (schedule.go), so in a three hour slot:
+// A node is asked SampleRounds times in every slot, once in each SAMPLING WINDOW,
+// at a random moment inside it. The windows sit inside the firing window
+// (schedule.go): the first opens it, the last closes it, and the others are spread
+// evenly between, so in a three hour slot with the default half hour of clearance
+// at each end:
 //
 //	round 1   0:30 to 1:00
-//	round 2   2:00 to 2:30
+//	round 2   1:15 to 1:45
+//	round 3   2:00 to 2:30
 //
-// Two samples this far apart say the node was up and answering at both ends of
-// the slot, not only once. A random moment inside each window means a node cannot
-// know when it will be asked.
+// Samples this far apart say the node was up and answering across the slot, not
+// only once. A random moment inside each window means a node cannot know when it
+// will be asked.
 //
-// Both kinds of request follow this clock: the quiz (quiz.go) and, for a group of
-// nodes running the same model, the sentence request of the model-identity check
-// (compare.go). A ticket is settled once, a minute after the second window closes
-// (settle.go).
+// Both kinds of request follow this clock: the quiz (quiz.go) and the reference
+// check (refcheck.go). A ticket is settled once, a minute after the last window
+// closes (settle.go), and needs SamplePassNeeded of the rounds passed.
 
 import (
 	"fmt"
@@ -26,6 +28,13 @@ import (
 )
 
 const (
+	// SampleRounds is how many times a node is asked in a slot.
+	SampleRounds = 3
+
+	// DefaultSamplePassMin is how many of those rounds a node has to pass for a
+	// ticket when the config does not say (Config.SamplePassMin).
+	DefaultSamplePassMin = 2
+
 	// sampleWindow is how long each sampling window is.
 	sampleWindow = 30 * time.Minute
 
@@ -35,20 +44,35 @@ const (
 	sampleSettleMargin = time.Minute
 )
 
-// sampleWindows returns the two sampling windows as offsets from the slot start:
-// the first sampleWindow of the firing window and the last. A firing window too
-// short for two of them is split in half.
-func sampleWindows(slotSec int, lead, tail time.Duration) [2][2]time.Duration {
+// sampleWindows returns the sampling windows as offsets from the slot start. Each
+// is sampleWindow long, or a third of the firing window if that is shorter, so
+// that they never overlap: the first starts the firing window, the last ends it, and
+// the rest are centred at equal steps between.
+func sampleWindows(slotSec int, lead, tail time.Duration) [SampleRounds][2]time.Duration {
 	opens, closes := fireWindow(slotSec, lead, tail)
+	span := closes - opens
 	w := sampleWindow
-	if half := (closes - opens) / 2; w > half {
-		w = half
+	if limit := span / SampleRounds; w > limit {
+		w = limit
 	}
-	return [2][2]time.Duration{{opens, opens + w}, {closes - w, closes}}
+	var out [SampleRounds][2]time.Duration
+	last := SampleRounds - 1
+	for i := range out {
+		switch i {
+		case 0:
+			out[i] = [2]time.Duration{opens, opens + w}
+		case last:
+			out[i] = [2]time.Duration{closes - w, closes}
+		default:
+			centre := opens + span*time.Duration(i)/time.Duration(last)
+			out[i] = [2]time.Duration{centre - w/2, centre - w/2 + w}
+		}
+	}
+	return out
 }
 
 // sampleClock is this slot's start and sampling windows.
-func (p *Prober) sampleClock() (time.Time, [2][2]time.Duration) {
+func (p *Prober) sampleClock() (time.Time, [SampleRounds][2]time.Duration) {
 	slotSec := p.assign.SlotSec
 	if slotSec <= 0 {
 		slotSec = faucet.SlotSeconds
@@ -66,7 +90,7 @@ func (p *Prober) sampleMargin() time.Duration {
 	return m
 }
 
-// sampleRoundAt is the sampling round whose window holds now: 1, 2, or 0 between
+// sampleRoundAt is the sampling round whose window holds now: 1 to SampleRounds, or 0 between
 // the windows and outside them.
 func (p *Prober) sampleRoundAt(now time.Time) int {
 	start, win := p.sampleClock()

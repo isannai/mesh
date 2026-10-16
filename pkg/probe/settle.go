@@ -3,14 +3,15 @@ package probe
 // settle.go: deciding a slot's tickets.
 //
 // A ticket is the receipt for a slot, and nothing is issued while a slot is still
-// asking. Once the second sampling window is over (sample.go), every node the slot
+// asking. Once the last sampling window is over (sample.go), every node the slot
 // asked is decided at once, by how its group is checked (refcheck.go):
 //
 //	quiz       asked in each sampling window (quiz.go). A ticket needs the quiz
-//	           passed in BOTH rounds.
+//	           passed in SamplePassNeeded of the SampleRounds rounds (2 of 3 unless
+//	           the config says otherwise).
 //	ref, cache the reference check in each sampling window (refcheck.go). A ticket
-//	           needs it passed in BOTH rounds; a reference node, its answers
-//	           agreeing with the other references in both.
+//	           needs it passed in as many rounds; a reference node, its answers
+//	           agreeing with the other references in them.
 //	unlisted   the budget's check info does not list the node's GPU: no ticket.
 //
 // The ticket then names the group's budget (ticketFor). The majority sentence
@@ -18,17 +19,18 @@ package probe
 // the honest nodes, and the reference nodes are the measure now (probe.md
 // 「쓰지 않는 방식」).
 //
-// 🔴 TWO PASSES, OR NO TICKET. A round the node was asked in and did not pass is
-// lost, whatever the reason (wrong, cut off, refused, busy, no answer inside its
-// deadline): there is no retry, and refusing the question must not be a way to
+// 🔴 ENOUGH PASSES, OR NO TICKET. A round the node was asked in and did not pass is
+// not a pass, whatever the reason (wrong, cut off, refused, busy, no answer inside
+// its deadline): there is no retry, and refusing the question must not be a way to
 // avoid it. A round it was not asked in is not a pass either. By the time a slot is
-// settled both windows are closed, so there is no asking it again, and one sample
-// is not what a ticket is meant to rest on. That costs a node its slot when the
-// prober was down for a whole window, when the node was not in the directory
-// during one, or when the prober's own shot failed (OutcomeSkipped). A node that
-// was not asked at all in either round has nothing to decide.
+// settled every window is closed, so there is no asking it again. With 2 of 3 a
+// node can miss one round, a reference that was down for one window or a prober
+// restart, and still be paid; missing two costs it the slot, as does the prober
+// being down for two windows, the node being out of the directory for two, or the
+// prober's own shots failing (OutcomeSkipped) twice. A node that was not asked at
+// all in any round has nothing to decide.
 //
-// WHEN. From a minute after the second window closes until the slot ends, on every
+// WHEN. From a minute after the last window closes until the slot ends, on every
 // tick, so a node whose last result came in late is decided on the next one. A
 // ticket is bound to the slot's root and the node keeps only the current one, so
 // nothing is issued once the slot is over.
@@ -47,6 +49,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/isannai/mesh/pkg/faucet"
@@ -79,45 +82,62 @@ func quizLabel(s *QuizShot) string {
 	}
 }
 
-// quizSummary renders both rounds for a log line.
-func quizSummary(r [2]*QuizShot) string {
-	return fmt.Sprintf("round 1 %s, round 2 %s", quizLabel(r[0]), quizLabel(r[1]))
+// quizSummary renders the rounds for a log line.
+func quizSummary(r [SampleRounds]*QuizShot) string {
+	parts := make([]string, len(r))
+	for i, shot := range r {
+		parts[i] = fmt.Sprintf("round %d %s", i+1, quizLabel(shot))
+	}
+	return strings.Join(parts, ", ")
 }
 
-// decideTicket turns a node's two quiz rounds into a call. The string says why,
-// for a refusal.
-func decideTicket(rounds [2]*QuizShot) (ticketCall, string) {
-	passed, pending, lost := 0, false, false
+// callFor is the decision the quiz and the reference check share, from what the
+// rounds came to: how many passed, how many are still in the air, how many were
+// answered wrongly or not at all, and how many passes the ticket needs.
+//
+//	passed enough        issue, whatever the others do
+//	could still pass     wait: a result is still to come that can make it
+//	never asked          nothing to decide
+//	otherwise            refuse
+func callFor(passed, pending, failed, need int) ticketCall {
+	switch {
+	case passed >= need:
+		return callIssue
+	case pending > 0 && passed+pending >= need:
+		return callWait
+	case passed == 0 && pending == 0 && failed == 0:
+		return callNone
+	default:
+		return callRefuse
+	}
+}
+
+// decideTicket turns a node's quiz rounds into a call. The string says why, for a
+// refusal.
+func decideTicket(rounds [SampleRounds]*QuizShot, need int) (ticketCall, string) {
+	passed, pending, failed := 0, 0, 0
 	for _, r := range rounds {
 		switch {
 		case r == nil, r.Outcome == OutcomeSkipped:
 			// not asked, or the prober's own failure: not a pass
 		case r.Outcome == OutcomeSubmitted:
-			pending = true
+			pending++
 		case r.Outcome == OutcomeAnswered && r.Verdict == VerdictPass:
 			passed++
 		default:
-			lost = true
+			failed++
 		}
 	}
-	if lost {
-		return callRefuse, "quiz not passed (" + quizSummary(rounds) + ")"
+	call := callFor(passed, pending, failed, need)
+	if call != callRefuse {
+		return call, ""
 	}
-	if pending {
-		return callWait, ""
-	}
-	if passed == 0 {
-		return callNone, ""
-	}
-	if passed < 2 {
-		return callRefuse, "quiz passed in one round only (" + quizSummary(rounds) + ")"
-	}
-	return callIssue, ""
+	return call, fmt.Sprintf("quiz passed %d of %d rounds, needs %d (%s)", passed, SampleRounds, need, quizSummary(rounds))
 }
 
 // modelShifted reports whether a node was asked on a model other than the one the
 // directory names for it now, and which. A shot the prober skipped was not asked.
-func modelShifted(rounds [2]*QuizShot, current string) (was string, shifted bool) {
+func modelShifted(rounds [SampleRounds]*QuizShot, current string) (was string, shifted bool) {
 	for _, r := range rounds {
 		if r == nil || r.Outcome == OutcomeSkipped {
 			continue
@@ -136,7 +156,7 @@ func (p *Prober) settleTickets(now time.Time) {
 		return
 	}
 	start, win := p.sampleClock()
-	if now.Before(start.Add(win[1][1]).Add(p.sampleMargin())) {
+	if now.Before(start.Add(win[SampleRounds-1][1]).Add(p.sampleMargin())) {
 		return
 	}
 	epoch := p.assign.Epoch
@@ -162,16 +182,16 @@ func (p *Prober) settleTickets(now time.Time) {
 	}
 
 	// The first result of a node in a round stands.
-	byNode := map[string]*[2]*QuizShot{}
+	byNode := map[string]*[SampleRounds]*QuizShot{}
 	var ids []string
 	for i := range shots {
 		s := &shots[i]
-		if s.Round < 1 || s.Round > 2 {
+		if s.Round < 1 || s.Round > SampleRounds {
 			continue
 		}
 		r := byNode[s.NodeID]
 		if r == nil {
-			r = &[2]*QuizShot{}
+			r = &[SampleRounds]*QuizShot{}
 			byNode[s.NodeID] = r
 			ids = append(ids, s.NodeID)
 		}
@@ -219,6 +239,7 @@ func (p *Prober) settleTickets(now time.Time) {
 		}
 	}
 
+	need := p.cfg.SamplePassNeeded()
 	began := time.Now()
 	var issued, refused, gone int
 	for _, id := range ids {
@@ -231,7 +252,7 @@ func (p *Prober) settleTickets(now time.Time) {
 			log.Printf("[probe] settle: the slot ended with tickets still to sign")
 			break
 		}
-		var rounds [2]*QuizShot
+		var rounds [SampleRounds]*QuizShot
 		if r := byNode[id]; r != nil {
 			rounds = *r
 		}
@@ -244,9 +265,9 @@ func (p *Prober) settleTickets(now time.Time) {
 		case ModeUnlisted:
 			call, why = callRefuse, "its GPU is not in the budget's check info"
 		case ModeRef, ModeCache:
-			call, why = decideRef(refRows[id])
+			call, why = decideRef(refRows[id], need)
 		default:
-			call, why = decideTicket(rounds)
+			call, why = decideTicket(rounds, need)
 		}
 		switch call {
 		case callWait, callNone:
@@ -302,7 +323,7 @@ func (p *Prober) settleTickets(now time.Time) {
 
 // firstService is the service a node was asked on, for a record kept without its
 // target.
-func firstService(rounds [2]*QuizShot) string {
+func firstService(rounds [SampleRounds]*QuizShot) string {
 	for _, r := range rounds {
 		if r != nil && r.Service != "" {
 			return r.Service

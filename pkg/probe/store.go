@@ -570,12 +570,12 @@ type QuizShot struct {
 	Verdict   string
 }
 
-// QuizShots returns the text shots of both quiz rounds of a slot, oldest first.
+// QuizShots returns the text shots of all the quiz rounds of a slot, oldest first.
 // A picture (round 0) is not one of them.
 func (s *Store) QuizShots(epoch int64) ([]QuizShot, error) {
 	rows, err := s.db.Query(
 		`SELECT node_id, COALESCE(service,''), COALESCE(model_hash,''), round, outcome, COALESCE(verdict,'')
-		   FROM shot WHERE assign_epoch=? AND round IN (1, 2) ORDER BY id`, epoch)
+		   FROM shot WHERE assign_epoch=? AND round BETWEEN 1 AND ? ORDER BY id`, epoch, SampleRounds)
 	if err != nil {
 		return nil, err
 	}

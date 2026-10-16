@@ -203,6 +203,10 @@ type Config struct {
 	// are consumed once and discarded (that is what makes a cache attack
 	// impossible), so the queue drains continuously.
 	QueueLowWater int `json:"queue_low_water"`
+	// SamplePassMin is how many of a slot's SampleRounds rounds a node has to pass for
+	// a ticket (settle.go). 0 means DefaultSamplePassMin; a value above the number of
+	// rounds is the number of rounds (every round).
+	SamplePassMin int `json:"sample_pass_min"`
 	// ObservationDays is how long hourly directory snapshots are kept. The
 	// eventual "was this node public all day" rule reads them, so it outlives
 	// the 15-day claim window.
@@ -281,6 +285,20 @@ func DefaultConfig() Config {
 // operator who wants the full slot has said so explicitly.
 func (c Config) FireLead() time.Duration { return fireBound(c.FireLeadSec, DefaultFireLead) }
 func (c Config) FireTail() time.Duration { return fireBound(c.FireTailSec, DefaultFireTail) }
+
+// SamplePassNeeded is how many sampling rounds a node has to pass for its ticket:
+// SamplePassMin, DefaultSamplePassMin when unset, and never more than there are
+// rounds. A negative value is a typo and reads as unset.
+func (c Config) SamplePassNeeded() int {
+	n := c.SamplePassMin
+	if n < 1 {
+		n = DefaultSamplePassMin
+	}
+	if n > SampleRounds {
+		n = SampleRounds
+	}
+	return n
+}
 
 // Batch resolves the per-round batch sizes: text subnets, then image nodes.
 func (c Config) Batch() (int, int) {
@@ -1039,8 +1057,8 @@ func (p *Prober) prune(now time.Time) {
 }
 
 // FireRound fires this round's share of the slot's work: the quiz, if the clock
-// is inside one of the two sampling windows (sample.go), and a picture. It also
-// settles the slot's tickets once the second window is over (settle.go).
+// is inside one of the sampling windows (sample.go), and a picture. It also
+// settles the slot's tickets once the last window is over (settle.go).
 //
 // HOW QUESTIONS ARE SHARED — the two rules point in opposite directions, and
 // both matter:
@@ -1385,7 +1403,7 @@ func (p *Prober) takeQuestions(n int, now time.Time) []Question {
 
 // fireOne runs one question through one node, submit to result. The result is
 // recorded and nothing more: a passing node is not issued a ticket here, because
-// its slot is decided as a whole once the second round is over (settle.go).
+// its slot is decided as a whole once the last round is over (settle.go).
 func (p *Prober) fireOne(t Target, q Question, round int, stats *roundStats) {
 	now := time.Now()
 

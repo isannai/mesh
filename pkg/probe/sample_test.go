@@ -8,18 +8,33 @@ import (
 	"github.com/isannai/mesh/pkg/faucet"
 )
 
-// The two sampling windows are the first and the last half hour of the firing
-// window: 0:30 to 1:00 and 2:00 to 2:30 of a three hour slot.
+// The three sampling windows are the first half hour of the firing window, the last,
+// and one centred between: 0:30 to 1:00, 1:15 to 1:45 and 2:00 to 2:30 of a three
+// hour slot.
 func TestSampleWindows(t *testing.T) {
 	w := sampleWindows(faucet.SlotSeconds, 30*time.Minute, 30*time.Minute)
-	want := [2][2]time.Duration{{30 * time.Minute, time.Hour}, {2 * time.Hour, 2*time.Hour + 30*time.Minute}}
+	want := [SampleRounds][2]time.Duration{
+		{30 * time.Minute, time.Hour},
+		{75 * time.Minute, 105 * time.Minute},
+		{2 * time.Hour, 2*time.Hour + 30*time.Minute},
+	}
 	if w != want {
 		t.Errorf("windows = %v, want %v", w, want)
 	}
-	// A firing window too short for two half hours is split in half.
+	// A firing window too short for three half hours gives each a third, side by
+	// side and never overlapping.
 	short := sampleWindows(3600, 10*time.Minute, 10*time.Minute) // 10m .. 50m
-	if short[0][1] != 30*time.Minute || short[1][0] != 30*time.Minute {
-		t.Errorf("short windows = %v", short)
+	third := 40 * time.Minute / SampleRounds
+	for i, win := range short {
+		if win[1]-win[0] != third {
+			t.Errorf("short window %d is %v long, want %v: %v", i+1, win[1]-win[0], third, short)
+		}
+		if i > 0 && win[0] < short[i-1][1] {
+			t.Errorf("short window %d starts before window %d ends: %v", i+1, i, short)
+		}
+	}
+	if short[0][0] != 10*time.Minute || short[SampleRounds-1][1] != 50*time.Minute {
+		t.Errorf("short windows do not span the firing window: %v", short)
 	}
 
 	p := compareProber(t, 3)
@@ -29,7 +44,9 @@ func TestSampleWindows(t *testing.T) {
 		round int
 	}{
 		{0, 0}, {29 * time.Minute, 0}, {30 * time.Minute, 1}, {59*time.Minute + 59*time.Second, 1},
-		{time.Hour, 0}, {90 * time.Minute, 0}, {2 * time.Hour, 2}, {2*time.Hour + 29*time.Minute, 2},
+		{time.Hour, 0}, {74 * time.Minute, 0}, {75 * time.Minute, 2}, {90 * time.Minute, 2},
+		{104*time.Minute + 59*time.Second, 2}, {105 * time.Minute, 0}, {119 * time.Minute, 0},
+		{2 * time.Hour, 3}, {2*time.Hour + 29*time.Minute, 3},
 		{2*time.Hour + 30*time.Minute, 0}, {2*time.Hour + 45*time.Minute, 0},
 	} {
 		if got := p.sampleRoundAt(start.Add(c.at)); got != c.round {

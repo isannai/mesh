@@ -99,7 +99,8 @@ func TestDueQuizWaitsForItsMoment(t *testing.T) {
 func TestDueQuizAsksOncePerRound(t *testing.T) {
 	p := quizProber(t, "10.0.1", "10.0.2")
 	end1 := compareSlotStart().Add(59*time.Minute + 50*time.Second)
-	end2 := compareSlotStart().Add(2*time.Hour + 29*time.Minute + 50*time.Second)
+	end2 := compareSlotStart().Add(104*time.Minute + 50*time.Second)
+	end3 := compareSlotStart().Add(2*time.Hour + 29*time.Minute + 50*time.Second)
 
 	if got := p.dueQuiz(end1, 1, nil); len(got) != 2 {
 		t.Fatalf("%d due at the end of round 1, want 2", len(got))
@@ -109,13 +110,16 @@ func TestDueQuizAsksOncePerRound(t *testing.T) {
 	if len(got) != 1 || got[0].Node.ID != p.targets[1].Node.ID {
 		t.Errorf("due after one was asked = %+v, want only the other", got)
 	}
-	// Asked in round 1 says nothing about round 2.
+	// Asked in round 1 says nothing about the later rounds.
 	if got := p.dueQuiz(end2, 2, nil); len(got) != 2 {
 		t.Errorf("%d due in round 2, want 2", len(got))
 	}
+	if got := p.dueQuiz(end3, 3, nil); len(got) != 2 {
+		t.Errorf("%d due in round 3, want 2", len(got))
+	}
 	// Between the windows there is no round.
-	if p.dueQuiz(end1, 0, nil) != nil || p.dueQuiz(end1, 3, nil) != nil {
-		t.Error("a round that is not 1 or 2 had nodes due")
+	if p.dueQuiz(end1, 0, nil) != nil || p.dueQuiz(end1, SampleRounds+1, nil) != nil {
+		t.Error("a round outside 1 to the last had nodes due")
 	}
 }
 
@@ -175,8 +179,8 @@ func TestFireOneRecordsTheRoundAndIssuesNothing(t *testing.T) {
 
 // A slot from the first question to the tickets: nothing before the first window,
 // one shot to each node in each window, nothing between, no ticket until a minute
-// after the second window, and then one ticket each, once.
-func TestAQuizTwiceThenTheTicket(t *testing.T) {
+// after the last window, and then one ticket each, once.
+func TestAQuizThreeTimesThenTheTicket(t *testing.T) {
 	node := &compareNode{answer: func(string) string { return "2" }}
 	srv := httptest.NewServer(node)
 	defer srv.Close()
@@ -213,23 +217,36 @@ func TestAQuizTwiceThenTheTicket(t *testing.T) {
 		t.Errorf("%d shots after round 1, want 2", shotsOf())
 	}
 
-	p.fireRoundAt(start.Add(90 * time.Minute)) // between the windows
+	p.fireRoundAt(start.Add(65 * time.Minute)) // between the first and the second window
 	if shotsOf() != 2 {
 		t.Errorf("a shot went out between the windows: %d", shotsOf())
 	}
 
-	p.fireRoundAt(start.Add(2*time.Hour + 29*time.Minute + 50*time.Second))
+	p.fireRoundAt(start.Add(104*time.Minute + 50*time.Second))
 	if r2, _ := p.store.ShotCountsInRound(compareEpoch, 2); len(r2) != 2 {
 		t.Fatalf("round 2 asked %v, want both nodes", r2)
 	}
 	if shotsOf() != 4 {
 		t.Errorf("%d shots after round 2, want 4", shotsOf())
 	}
+
+	p.fireRoundAt(start.Add(110 * time.Minute)) // between the second and the third window
+	if shotsOf() != 4 {
+		t.Errorf("a shot went out between the windows: %d", shotsOf())
+	}
+
+	p.fireRoundAt(start.Add(2*time.Hour + 29*time.Minute + 50*time.Second))
+	if r3, _ := p.store.ShotCountsInRound(compareEpoch, 3); len(r3) != 2 {
+		t.Fatalf("round 3 asked %v, want both nodes", r3)
+	}
+	if shotsOf() != 6 {
+		t.Errorf("%d shots after round 3, want 6", shotsOf())
+	}
 	if len(issued) != 0 {
 		t.Fatalf("tickets issued before the slot was settled: %v", issued)
 	}
 
-	// The second window is over but the margin after it is not.
+	// The last window is over but the margin after it is not.
 	p.fireRoundAt(start.Add(2*time.Hour + 30*time.Minute))
 	if len(issued) != 0 {
 		t.Fatalf("settled inside the margin: %v", issued)
@@ -243,7 +260,7 @@ func TestAQuizTwiceThenTheTicket(t *testing.T) {
 		t.Errorf("a settled ticket was issued again: %v", issued)
 	}
 
-	// Each node was given a different question in the two rounds.
+	// Each node was given a different question in every round.
 	rows, err := p.store.db.Query(`SELECT node_id, COUNT(DISTINCT question_id) FROM shot GROUP BY node_id`)
 	if err != nil {
 		t.Fatal(err)
@@ -255,8 +272,8 @@ func TestAQuizTwiceThenTheTicket(t *testing.T) {
 		if err := rows.Scan(&id, &distinct); err != nil {
 			t.Fatal(err)
 		}
-		if distinct != 2 {
-			t.Errorf("%s was asked %d different questions, want 2", id, distinct)
+		if distinct != SampleRounds {
+			t.Errorf("%s was asked %d different questions, want %d", id, distinct, SampleRounds)
 		}
 	}
 }

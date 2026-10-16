@@ -37,12 +37,13 @@ func quizShot(t *testing.T, p *Prober, idx, round int, end string) {
 	}
 }
 
-// quizBoth gives the listed nodes a passing shot in both rounds.
+// quizBoth gives the listed nodes a passing shot in every round.
 func quizBoth(t *testing.T, p *Prober, idx ...int) {
 	t.Helper()
 	for _, i := range idx {
-		quizShot(t, p, i, 1, VerdictPass)
-		quizShot(t, p, i, 2, VerdictPass)
+		for round := 1; round <= SampleRounds; round++ {
+			quizShot(t, p, i, round, VerdictPass)
+		}
 	}
 }
 
@@ -63,28 +64,41 @@ func nodeIDs(p *Prober, idx ...int) string {
 func TestDecideTicket(t *testing.T) {
 	sh := func(outcome, verdict string) *QuizShot { return &QuizShot{Outcome: outcome, Verdict: verdict} }
 	pass := sh(OutcomeAnswered, VerdictPass)
+	fail := sh(OutcomeAnswered, VerdictFail)
+	air := sh(OutcomeSubmitted, "")
 	cases := []struct {
 		name string
-		r    [2]*QuizShot
+		r    [SampleRounds]*QuizShot
+		need int
 		want ticketCall
 	}{
-		{"both rounds passed", [2]*QuizShot{pass, pass}, callIssue},
-		{"the first round wrong", [2]*QuizShot{sh(OutcomeAnswered, VerdictFail), pass}, callRefuse},
-		{"the second round wrong", [2]*QuizShot{pass, sh(OutcomeAnswered, VerdictFail)}, callRefuse},
-		{"an answer cut off is not a pass", [2]*QuizShot{pass, sh(OutcomeAnswered, VerdictTruncated)}, callRefuse},
-		{"no answer in time", [2]*QuizShot{pass, sh(OutcomeTimeout, "")}, callRefuse},
-		{"refused", [2]*QuizShot{sh(OutcomeRefused, ""), pass}, callRefuse},
-		{"queue full", [2]*QuizShot{pass, sh(OutcomeQueueFull, "")}, callRefuse},
-		{"asked in round 1 only: one pass is not two", [2]*QuizShot{pass, nil}, callRefuse},
-		{"asked in round 2 only: one pass is not two", [2]*QuizShot{nil, pass}, callRefuse},
-		{"a round the prober skipped is not a pass", [2]*QuizShot{sh(OutcomeSkipped, ""), pass}, callRefuse},
-		{"only the prober's own failure", [2]*QuizShot{sh(OutcomeSkipped, ""), nil}, callNone},
-		{"never asked", [2]*QuizShot{nil, nil}, callNone},
-		{"a result still to come", [2]*QuizShot{pass, sh(OutcomeSubmitted, "")}, callWait},
-		{"a lost round decides even with another in the air", [2]*QuizShot{sh(OutcomeAnswered, VerdictFail), sh(OutcomeSubmitted, "")}, callRefuse},
+		{"every round passed", [SampleRounds]*QuizShot{pass, pass, pass}, 2, callIssue},
+		{"the first round wrong, two others passed", [SampleRounds]*QuizShot{fail, pass, pass}, 2, callIssue},
+		{"the middle round wrong, two others passed", [SampleRounds]*QuizShot{pass, fail, pass}, 2, callIssue},
+		{"the last round wrong, two others passed", [SampleRounds]*QuizShot{pass, pass, fail}, 2, callIssue},
+		{"asked in two rounds only, both passed", [SampleRounds]*QuizShot{pass, nil, pass}, 2, callIssue},
+		{"two rounds wrong", [SampleRounds]*QuizShot{pass, fail, fail}, 2, callRefuse},
+		{"every round wrong", [SampleRounds]*QuizShot{fail, fail, fail}, 2, callRefuse},
+		{"an answer cut off is not a pass", [SampleRounds]*QuizShot{pass, sh(OutcomeAnswered, VerdictTruncated), nil}, 2, callRefuse},
+		{"no answer in time is not a pass", [SampleRounds]*QuizShot{pass, sh(OutcomeTimeout, ""), nil}, 2, callRefuse},
+		{"refused is not a pass", [SampleRounds]*QuizShot{sh(OutcomeRefused, ""), pass, nil}, 2, callRefuse},
+		{"queue full is not a pass", [SampleRounds]*QuizShot{pass, sh(OutcomeQueueFull, ""), nil}, 2, callRefuse},
+		{"one pass is not two", [SampleRounds]*QuizShot{pass, nil, nil}, 2, callRefuse},
+		{"asked in the last round only: one pass is not two", [SampleRounds]*QuizShot{nil, nil, pass}, 2, callRefuse},
+		{"a round the prober skipped is not a pass", [SampleRounds]*QuizShot{sh(OutcomeSkipped, ""), pass, nil}, 2, callRefuse},
+		{"a skipped round does not stop the other two", [SampleRounds]*QuizShot{sh(OutcomeSkipped, ""), pass, pass}, 2, callIssue},
+		{"only the prober's own failure", [SampleRounds]*QuizShot{sh(OutcomeSkipped, ""), nil, nil}, 2, callNone},
+		{"never asked", [SampleRounds]*QuizShot{nil, nil, nil}, 2, callNone},
+		{"enough passed already, one still in the air", [SampleRounds]*QuizShot{pass, pass, air}, 2, callIssue},
+		{"a result still to come could make it", [SampleRounds]*QuizShot{pass, air, nil}, 2, callWait},
+		{"a wrong round and one in the air could still make it", [SampleRounds]*QuizShot{pass, fail, air}, 2, callWait},
+		{"two wrong and one in the air cannot make it", [SampleRounds]*QuizShot{fail, fail, air}, 2, callRefuse},
+		{"all three needed, one wrong", [SampleRounds]*QuizShot{pass, pass, fail}, 3, callRefuse},
+		{"all three needed, all passed", [SampleRounds]*QuizShot{pass, pass, pass}, 3, callIssue},
+		{"one is enough when the config says so", [SampleRounds]*QuizShot{fail, pass, fail}, 1, callIssue},
 	}
 	for _, c := range cases {
-		got, why := decideTicket(c.r)
+		got, why := decideTicket(c.r, c.need)
 		if got != c.want {
 			t.Errorf("%s: call %d (%q), want %d", c.name, got, why, c.want)
 		}
@@ -94,39 +108,54 @@ func TestDecideTicket(t *testing.T) {
 	}
 }
 
-// 🔴 A ticket needs the quiz passed in BOTH rounds.
-func TestSettlePaysOnlyThoseWhoPassedBothRounds(t *testing.T) {
-	p := compareProber(t, 7)
+// The passes a ticket needs: 2 unless the config says, never more than the rounds
+// there are, and a nonsense value is read as unset.
+func TestSamplePassNeeded(t *testing.T) {
+	for _, c := range []struct{ set, want int }{{0, 2}, {-1, 2}, {1, 1}, {2, 2}, {3, 3}, {9, SampleRounds}} {
+		if got := (Config{SamplePassMin: c.set}).SamplePassNeeded(); got != c.want {
+			t.Errorf("sample_pass_min %d: need %d, want %d", c.set, got, c.want)
+		}
+	}
+}
+
+// 🔴 A ticket needs the quiz passed in enough rounds: 2 of the 3.
+func TestSettlePaysOnlyThoseWhoPassedEnoughRounds(t *testing.T) {
+	p := compareProber(t, 8)
 	var issued []string
 	issuedBy(p, &issued)
 
-	quizBoth(t, p, 0)                      // 0: pass, pass
-	quizShot(t, p, 1, 1, VerdictPass)      // 1: pass, fail
+	quizBoth(t, p, 0)                      // 0: pass, pass, pass
+	quizShot(t, p, 1, 1, VerdictPass)      // 1: pass, fail, pass
 	quizShot(t, p, 1, 2, VerdictFail)      //
-	quizShot(t, p, 2, 1, VerdictFail)      // 2: fail, pass
+	quizShot(t, p, 1, 3, VerdictPass)      //
+	quizShot(t, p, 2, 1, VerdictFail)      // 2: fail, pass, fail
 	quizShot(t, p, 2, 2, VerdictPass)      //
+	quizShot(t, p, 2, 3, VerdictFail)      //
 	quizShot(t, p, 3, 1, VerdictPass)      // 3: asked in round 1 only
-	quizShot(t, p, 4, 1, OutcomeTimeout)   // 4: no answer, then pass
+	quizShot(t, p, 4, 1, OutcomeTimeout)   // 4: no answer, then pass, pass
 	quizShot(t, p, 4, 2, VerdictPass)      //
-	quizShot(t, p, 5, 1, VerdictPass)      // 5: pass, cut off
+	quizShot(t, p, 4, 3, VerdictPass)      //
+	quizShot(t, p, 5, 1, VerdictPass)      // 5: pass, cut off, wrong
 	quizShot(t, p, 5, 2, VerdictTruncated) //
-	// 6 was never asked
+	quizShot(t, p, 5, 3, VerdictFail)      //
+	quizShot(t, p, 6, 2, VerdictPass)      // 6: pass in the middle round, nothing else
+	// 7 was never asked
 
 	p.settleTickets(settleAt())
-	if got, want := sortedIDs(issued), nodeIDs(p, 0); got != want {
-		t.Errorf("issued %v, want only node 0, the one that passed both rounds", issued)
+	if got, want := sortedIDs(issued), nodeIDs(p, 0, 1, 4); got != want {
+		t.Errorf("issued %v, want nodes 0, 1 and 4, the ones that passed two rounds or more", issued)
 	}
 
 	settled, err := p.store.SettledTickets(compareEpoch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 7; i++ {
 		if !settled[p.targets[i].Node.ID] {
 			t.Errorf("node %d was decided but not recorded", i)
 		}
 	}
-	if settled[p.targets[6].Node.ID] {
+	if settled[p.targets[7].Node.ID] {
 		t.Error("a node that was never asked was recorded as decided")
 	}
 }
@@ -140,6 +169,7 @@ func TestSettleRecordsEachDecision(t *testing.T) {
 	quizBoth(t, p, 0)
 	quizShot(t, p, 1, 1, VerdictFail)
 	quizShot(t, p, 1, 2, VerdictPass)
+	quizShot(t, p, 1, 3, VerdictFail)
 
 	p.settleTickets(settleAt())
 
@@ -164,7 +194,7 @@ func TestSettleRecordsEachDecision(t *testing.T) {
 	}
 }
 
-// Nothing is decided before the margin after the second window, and nothing once
+// Nothing is decided before the margin after the last window, and nothing once
 // the slot is over.
 func TestSettleWaitsForItsTimeAndStopsWithTheSlot(t *testing.T) {
 	p := compareProber(t, 2)
@@ -209,13 +239,14 @@ func TestSettleDecidesEachNodeOnce(t *testing.T) {
 	}
 }
 
-// A shot still in the air is waited for, not settled on.
+// A shot still in the air that could make the difference is waited for, not settled on.
 func TestSettleWaitsForAResultStillComing(t *testing.T) {
 	p := compareProber(t, 2)
 	var issued []string
 	issuedBy(p, &issued)
 	quizShot(t, p, 0, 1, VerdictPass)
-	quizShot(t, p, 0, 2, OutcomeSubmitted)
+	quizShot(t, p, 0, 2, VerdictFail)
+	quizShot(t, p, 0, 3, OutcomeSubmitted) // one pass and one to come: could still make two
 	quizBoth(t, p, 1)
 
 	p.settleTickets(settleAt())
@@ -236,7 +267,7 @@ func TestSettleRefusesAChangedModel(t *testing.T) {
 	issuedBy(p, &issued)
 	quizBoth(t, p, 0, 1, 2)
 	other := "sha256:" + strings.Repeat("ab", 32)
-	p.targets[0].Service.ModelHash = other // changed since both rounds
+	p.targets[0].Service.ModelHash = other // changed since every round
 	// Node 2 was asked on another model in the second round only.
 	if _, err := p.store.db.Exec(`UPDATE shot SET model_hash = ? WHERE node_id = ? AND round = 2`,
 		other, p.targets[2].Node.ID); err != nil {
@@ -301,7 +332,7 @@ func TestSettleStopsWhenTheSlotRunsOutUnderIt(t *testing.T) {
 	}
 }
 
-// Passes are counted by slot: two quiz passes and a ticket are one earned slot, a
+// Passes are counted by slot: three quiz passes and a ticket are one earned slot, a
 // picture's own passing row is one, and a refusal is none.
 func TestPassesTodayCountsSlots(t *testing.T) {
 	p := compareProber(t, 3)
@@ -310,6 +341,7 @@ func TestPassesTodayCountsSlots(t *testing.T) {
 	quizBoth(t, p, 0)
 	quizShot(t, p, 1, 1, VerdictFail)
 	quizShot(t, p, 1, 2, VerdictPass)
+	quizShot(t, p, 1, 3, VerdictFail)
 	p.settleTickets(settleAt())
 
 	// A picture from another slot, passed, round 0.
