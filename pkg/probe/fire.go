@@ -75,8 +75,8 @@ type Firer struct {
 
 	mu      sync.Mutex
 	schemas map[string]*manifest.RunSpec // "<nodeID>|<svc>" → run schema
-	// probeRuns is each node service's run that returns candidates, nil when it
-	// has none (probprobs.go).
+	// probeRuns is each node service's default run when it returns candidates, nil
+	// when it cannot (probprobs.go).
 	probeRuns map[string]*manifest.RunSpec
 }
 

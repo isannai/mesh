@@ -290,20 +290,14 @@ func isCompletions(path string) bool { return path == "/v1/completions" }
 // cycle). See docs/bugs …stream-stall.md §3-3.
 // bufferedJob reports a job the worker must NOT turn into a stream.
 //
-//   - It asks for per-token candidate probabilities (llama.cpp n_probs, OpenAI
-//     logprobs). The faucet prober compares them with its reference nodes
+//   - It asks for per-token candidate probabilities (OpenAI logprobs, or llama.cpp
+//     n_probs). The faucet prober compares them with its reference nodes
 //     (workspace docs/todo/probe-기준노드.md 4절), and a reassembled stream keeps
 //     only the last chunk's, so every earlier token's would be lost.
-//   - It calls llama.cpp's own /completion, whose chunks carry the text at
-//     "content" rather than at the service's stream path: reassembled, the
-//     answer would come back empty.
 //
 // Such jobs are short (the prober asks for 8 tokens), so a buffered job's total
 // deadline costs nothing.
 func bufferedJob(job *Job) bool {
-	if job.Path == "/completion" {
-		return true
-	}
 	var m map[string]any
 	if json.Unmarshal(job.RequestBody, &m) != nil {
 		return false

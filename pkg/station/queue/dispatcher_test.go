@@ -450,7 +450,7 @@ func TestManagedProcessKeepsTokenProbs(t *testing.T) {
 	svc := setup.ServiceEntry{Name: "llm-api", Addr: addrFromTestServer(srv)}
 	process := MakeManagedProcess(svc, DispatchOptions{StreamPath: "choices[0].delta.content"})
 	for _, job := range []*Job{
-		{ID: "p1", ServiceName: "llm-api", Path: "/completion", RequestBody: []byte(`{"prompt":"Q","n_predict":8,"n_probs":5}`)},
+		{ID: "p1", ServiceName: "llm-api", Path: "/v1/chat/completions", RequestBody: []byte(`{"messages":[],"logprobs":true,"top_logprobs":5}`)},
 		{ID: "p2", ServiceName: "llm-api", Path: "/v1/completions", RequestBody: []byte(`{"prompt":"Q","n_probs":5}`)},
 	} {
 		code, _, body, err := process(context.Background(), job)
@@ -476,7 +476,6 @@ func TestBufferedJob(t *testing.T) {
 		{"/v1/chat/completions", `{"n_probs":0}`, false},
 		{"/v1/chat/completions", `{"logprobs":true,"top_logprobs":5}`, true},
 		{"/v1/completions", `{"logprobs":3}`, true},
-		{"/completion", `{"prompt":"x"}`, true},
 		{"/v1/chat/completions", `not json`, false},
 	}
 	for _, c := range cases {

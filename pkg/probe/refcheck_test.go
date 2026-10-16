@@ -168,7 +168,7 @@ func TestNewRefPromptIsFresh(t *testing.T) {
 	}
 }
 
-// probsNode is a node bridge that serves the /completion run with candidates. Each
+// probsNode is a node bridge whose default run returns candidates. Each
 // node answers a prompt with the text answer(node, prompt), one token a word.
 type probsNode struct {
 	mu      sync.Mutex
@@ -189,16 +189,15 @@ func (c *probsNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer c.mu.Unlock()
 	switch {
 	case strings.HasSuffix(path, "/run-schema"):
-		variants := []manifest.RunSpec{}
+		def := []manifest.RunParam{{Name: "prompt", Type: "string", Required: true}}
 		if !c.noProbs[node] {
-			variants = append(variants, manifest.RunSpec{Path: refPath, Params: []manifest.RunParam{
-				{Name: "prompt", Type: "string", Required: true}, {Name: "n-predict", Type: "int"},
-				{Name: "temperature", Type: "float"}, {Name: "n-probs", Type: "int"}, {Name: "stop", Type: "string"},
-			}})
+			def = append(def, manifest.RunParam{Name: "max-tokens", Type: "int"}, manifest.RunParam{Name: "temperature", Type: "float"},
+				manifest.RunParam{Name: "stop", Type: "string"}, manifest.RunParam{Name: "logprobs", Type: "bool"},
+				manifest.RunParam{Name: "top-logprobs", Type: "int"})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"default":  manifest.RunSpec{Path: "/v1/chat/completions", Params: []manifest.RunParam{{Name: "prompt", Type: "string", Required: true}}},
-			"variants": variants,
+			"default":  manifest.RunSpec{Path: "/v1/chat/completions", Params: def},
+			"variants": []manifest.RunSpec{},
 		})
 	case strings.HasSuffix(path, "/v1/jobs") && r.Method == http.MethodPost:
 		var body struct {
@@ -282,8 +281,8 @@ func TestRefGroupThroughAWholeSlot(t *testing.T) {
 		t.Errorf("%d quiz shots in a ref group, want none", len(quiz))
 	}
 	for _, path := range bridge.paths {
-		if path != refPath {
-			t.Fatalf("a submit named run %q, want %s", path, refPath)
+		if path != "" {
+			t.Fatalf("a submit named run %q, want the default run", path)
 		}
 	}
 	honest, cheat := p.targets[1].Node.ID, p.targets[2].Node.ID

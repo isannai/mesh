@@ -20,10 +20,10 @@ package probe
 // pass answers to each other, and it reaches a node only after the reference value
 // is fixed, so how a node answers cannot move the value it is judged by.
 //
-// THE QUESTION. A short sentence request in raw completion form, with words and a
-// number drawn from crypto/rand, so it is never asked twice and cannot be answered
-// in advance. Asked through the engine's /completion run with n_predict 8,
-// temperature 0, n_probs 5 and stop "." (probprobs.go). A question whose reference
+// THE QUESTION. A short sentence request, with words and a number drawn from
+// crypto/rand, so it is never asked twice and cannot be answered in advance. Asked
+// through the service's default run with max-tokens 8, temperature 0, logprobs with
+// top-logprobs 5 and stop "." (probprobs.go). A question whose reference
 // answer is under two tokens is replaced: a one-token answer is easy to hit.
 //
 // THE REFERENCE VALUE. One reference: its answer. Two or more: the answers are

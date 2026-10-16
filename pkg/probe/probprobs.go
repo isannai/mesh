@@ -7,12 +7,12 @@ package probe
 // the candidates the engine considered at that position (workspace
 // docs/todo/probe.md 「응답 읽기」). The quiz path (fire.go) reads only the text.
 //
-// The request goes to the llama.cpp run variant on /completion that the engine
-// manifest declares for this (GLink package-stage .../engines/llama/manifest.json,
-// 2026-10-14): a raw prompt, n_predict, temperature 0, n_probs and stop. The
-// station returns the engine's body untouched for a job that asks for n_probs
-// (mesh pkg/station/queue bufferedJob). A node whose manifest predates the
-// variant has no way to answer, and its check fails as no_probs.
+// The request goes to the service's default run, the same chat run the quiz uses
+// (GLink package-stage .../engines/llama/manifest.json): the prompt, max tokens 8,
+// temperature 0, stop, and logprobs with top-logprobs for the candidates. The
+// station returns the engine's body untouched for a job that asks for logprobs
+// (mesh pkg/station/queue bufferedJob). A node whose default run does not declare
+// logprobs and top-logprobs has no way to answer, and its check fails as no_probs.
 //
 // Engines spell the candidates differently, and llama.cpp changed its own format
 // over time, so every known spelling is read:
@@ -26,7 +26,6 @@ package probe
 // on one scale.
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +40,6 @@ import (
 
 // The request of a reference check (workspace docs/todo/probe.md 「요청」).
 const (
-	refPath    = "/completion"
 	refPredict = 8
 	refProbs   = 5
 )
@@ -49,7 +47,7 @@ const (
 var refStop = []string{"."}
 
 // errNoProbeRun: the node's engine declares no run that returns candidates.
-var errNoProbeRun = errors.New("the service declares no /completion run with n-probs")
+var errNoProbeRun = errors.New("the service's default run declares no logprobs and top-logprobs")
 
 // TokenProbs is one generated token and the candidates at its position.
 type TokenProbs struct {
@@ -63,8 +61,9 @@ type ProbAnswer struct {
 	Tokens []TokenProbs `json:"tokens"`
 }
 
-// ProbeRun finds (and caches) the node service's run that returns candidates.
-// nil with no error when the service has none.
+// ProbeRun finds (and caches) the node service's default run when it can return
+// candidates: it declares logprobs and top-logprobs. nil with no error when it
+// cannot.
 func (f *Firer) ProbeRun(nodeID, svc string) (*manifest.RunSpec, error) {
 	key := nodeID + "|" + svc
 	f.mu.Lock()
@@ -77,26 +76,13 @@ func (f *Firer) ProbeRun(nodeID, svc string) (*manifest.RunSpec, error) {
 	}
 	f.mu.Unlock()
 
-	endpoint := f.nodeBase(nodeID) + "/svc/" + url.PathEscape(svc) + "/run-schema?variants=1"
-	body, code, err := f.get(endpoint, 15*time.Second)
+	rs, err := f.RunSchema(nodeID, svc)
 	if err != nil {
 		return nil, err
 	}
-	if code != http.StatusOK {
-		return nil, fmt.Errorf("run-schema: HTTP %d", code)
-	}
-	var set struct {
-		Default  *manifest.RunSpec  `json:"default"`
-		Variants []manifest.RunSpec `json:"variants"`
-	}
 	var found *manifest.RunSpec
-	if bytes.Contains(body, []byte(`"variants"`)) && json.Unmarshal(body, &set) == nil {
-		for i := range set.Variants {
-			if set.Variants[i].Path == refPath && declares(&set.Variants[i], "n-probs") {
-				found = &set.Variants[i]
-				break
-			}
-		}
+	if declares(rs, "logprobs") && declares(rs, "top-logprobs") {
+		found = rs
 	}
 	f.mu.Lock()
 	f.probeRuns[key] = found
@@ -122,22 +108,33 @@ func (f *Firer) SubmitProbs(t Target, prompt string) (SubmitResult, error) {
 	if rs == nil {
 		return SubmitResult{Outcome: OutcomeRefused}, errNoProbeRun
 	}
+	return f.SubmitRunProbe(t.Node.ID, t.Service.Name, probeRunBlock(rs, prompt), t.Probe)
+}
+
+// probeRunBlock is the run map of one reference-check question. Parameter NAMES come
+// from the schema, as in fire.go: a name the service does not declare is not sent.
+func probeRunBlock(rs *manifest.RunSpec, prompt string) map[string]any {
 	run := map[string]any{"prompt": prompt}
 	set := func(name string, v any) {
 		if declares(rs, name) {
 			run[name] = v
 		}
 	}
-	set("n-predict", refPredict)
+	set("max-tokens", refPredict)
+	set("logprobs", true)
+	set("top-logprobs", refProbs)
 	set("temperature", 0)
-	set("n-probs", refProbs)
 	set("stop", refStop)
-	return f.submitJob(t.Node.ID, t.Service.Name, rs.Path, run, t.Probe)
+	// Without this the engine reuses the previous request's prompt cache, and a
+	// cached prefix moves the candidates' probabilities by a few percent (measured
+	// 2026-10-16: up to 0.05 on the same prompt), far above the tolerance.
+	set("cache-prompt", false)
+	return run
 }
 
 // CollectProbs waits for a job and reads its answer with candidates. outcome is
 // OutcomeAnswered when the job finished; the answer may still carry no tokens
-// (an engine that ignored n_probs).
+// (an engine that ignored logprobs).
 func (f *Firer) CollectProbs(nodeID, jobID string, deadline time.Duration) (ProbAnswer, string, error) {
 	base := f.nodeBase(nodeID)
 	outcome, err := f.await(base, jobID, deadline)
