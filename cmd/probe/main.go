@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/isannai/mesh/pkg/probe"
+	"github.com/isannai/mesh/pkg/setup"
 )
 
 // options are the command line. They are defined on a FlagSet handed in, so the
@@ -35,6 +36,7 @@ type options struct {
 	epoch      *int64
 	detail     *bool
 	slotsN     *int
+	version    *bool
 }
 
 func defineFlags(fs *flag.FlagSet) *options {
@@ -55,6 +57,9 @@ func defineFlags(fs *flag.FlagSet) *options {
 		// to tell a fox from a wolf, which fails honest nodes and looks like a
 		// model problem. Eyeballing the draw is how that gets caught.
 		slotsN: fs.Int("slots", 0, "draw N image orders (prompt + CLIP checks) and exit"),
+		// isannd asks the installed binary for this (`isann version` shows it), so the
+		// answer is the file on disk, however it got there.
+		version: fs.Bool("version", false, "print the version this binary was built as and exit"),
 	}
 }
 
@@ -71,6 +76,11 @@ func main() {
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "probe: unknown command %q (try: probe.exe help)\n", flag.Arg(0))
 		os.Exit(2)
+	}
+
+	if *opt.version {
+		fmt.Println("probe", setup.ProbeVersion)
+		return
 	}
 
 	if *opt.slotsN > 0 {

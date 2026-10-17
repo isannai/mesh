@@ -11,6 +11,7 @@ package setup
 // 정책: docs/TODO/pkg_policy/package-distribution-policy.md §5.2
 var (
 	StationVersion  = "0.1.0"
+	ProbeVersion    = "0.1.0"
 	ControlVersion  = "0.1.0"
 	GateVersion     = "0.1.0"
 	FetcherVersion  = "0.1.0"

@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -22,13 +23,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/isannai/mesh/pkg/setup"
 	"github.com/isannai/mesh/pkg/station"
 	"github.com/isannai/mesh/pkg/tunnel"
 )
 
 func main() {
 	configFile := flag.String("config", "", "path to JSON config file (e.g., conf/station.json)")
+	showVersion := flag.Bool("version", false, "print the version this binary was built as and exit")
 	flag.Parse()
+
+	// isannd asks the installed binary for this (`isann version` shows it), so the
+	// answer is what is on disk now, however the file got there. One line, the
+	// version last, and nothing else on stdout.
+	if *showVersion {
+		fmt.Println("station", setup.StationVersion)
+		return
+	}
 
 	if *configFile == "" {
 		log.Fatal("[station] --config required (e.g. -config conf/station.json)")

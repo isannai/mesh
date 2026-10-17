@@ -15,6 +15,7 @@ REM  the exec bit on bin/<svc>. `isann app pull` content-sniffs gzip magic, so i
 REM  unpacks these regardless of the published url's extension.
 REM
 REM  Requires Node/npm (control SPA). CGO_ENABLED=0. Version via ldflags. REQUIRED.
+REM  mesh.json is packed with its "version" set to <ver> (build\stamp-mesh-json.ps1), not the 0.1.0 placeholder.
 REM    usage:  build\linux\mesh.bat 0.1.1
 REM ===========================================================================
 
@@ -34,7 +35,7 @@ set CGO_ENABLED=0
 REM Station/ControlVersion live in pkg/setup, pulled from GLink via the module
 REM replace; ldflags target the real import path so -X resolves as in GLink.
 set "PKG=github.com/isannai/mesh/pkg/setup"
-set "LDFLAGS=-X %PKG%.StationVersion=%VER% -X %PKG%.ControlVersion=%VER%"
+set "LDFLAGS=-X %PKG%.StationVersion=%VER% -X %PKG%.ProbeVersion=%VER% -X %PKG%.ControlVersion=%VER%"
 
 set "OUT=build\linux\out-mesh"
 
@@ -61,7 +62,7 @@ REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째
 REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
 xcopy /E /I /Y /Q "apps\station\conf" "%STN%\conf" >nul
 if errorlevel 1 goto :error
-copy /Y "apps\station\mesh.json" "%STN%\" >nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\stamp-mesh-json.ps1" -Src "apps\station\mesh.json" -Dst "%STN%\mesh.json" -Version "%VER%"
 if errorlevel 1 goto :error
 tar -czf "%OUT%\station-linux-amd64.tar.gz" -C "%STN%" .
 if errorlevel 1 goto :error
@@ -75,7 +76,7 @@ copy /Y "%CBT%\bin\chatbot" "%FLAT%\" >nul
 if errorlevel 1 goto :error
 xcopy /E /I /Y /Q "apps\chatbot\conf" "%CBT%\conf" >nul
 if errorlevel 1 goto :error
-copy /Y "apps\chatbot\mesh.json" "%CBT%\" >nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\stamp-mesh-json.ps1" -Src "apps\chatbot\mesh.json" -Dst "%CBT%\mesh.json" -Version "%VER%"
 if errorlevel 1 goto :error
 copy /Y "apps\chatbot\README.md" "%CBT%\" >nul
 if errorlevel 1 goto :error
@@ -104,7 +105,7 @@ REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째
 REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
 xcopy /E /I /Y /Q "apps\control\conf" "%CTL%\conf" >nul
 if errorlevel 1 goto :error
-copy /Y "apps\control\mesh.json" "%CTL%\" >nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\stamp-mesh-json.ps1" -Src "apps\control\mesh.json" -Dst "%CTL%\mesh.json" -Version "%VER%"
 if errorlevel 1 goto :error
 xcopy /E /I /Y /Q "web\control\build" "%CTL%\web\control\build" >nul
 if errorlevel 1 goto :error
@@ -126,7 +127,7 @@ REM conf 는 디렉터리 통째로. 파일명을 하나 박아두면 두 번째
 REM 조용히 누락된다 — errorlevel 도 안 뜬다. chatbot 이 원래 이 방식이었다.
 xcopy /E /I /Y /Q "apps\probe\conf" "%PRB%\conf" >nul
 if errorlevel 1 goto :error
-copy /Y "apps\probe\mesh.json" "%PRB%\" >nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\stamp-mesh-json.ps1" -Src "apps\probe\mesh.json" -Dst "%PRB%\mesh.json" -Version "%VER%"
 if errorlevel 1 goto :error
 copy /Y "apps\probe\README.md" "%PRB%\" >nul
 if errorlevel 1 goto :error

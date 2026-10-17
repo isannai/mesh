@@ -15,6 +15,7 @@ USAGE
   probe.exe [--id <id>] [--node <text>] [--epoch <n>] [-a]
                                          search the shots; --report is optional
   probe.exe --slots <N>                  draw N image orders and exit
+  probe.exe -version                     the version this file was built as
   probe.exe help                         this text
 
 RUN IT IN THE PROBE FOLDER
@@ -29,6 +30,7 @@ RUN IT IN THE PROBE FOLDER
 OPTIONS
   --config <file>   config file (default: $ISANN_MESH_CONFIG, else conf/probe.json)
   -once             run a single refresh + fire round and exit
+  -version          print the version this binary was built as, then exit
 
   --report <N>      print the last N shots, then the queue and the uptime
   --id <id>         only the shot with this id (the ID column)
