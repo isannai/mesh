@@ -207,6 +207,11 @@ type Config struct {
 	// a ticket (settle.go). 0 means DefaultSamplePassMin; a value above the number of
 	// rounds is the number of rounds (every round).
 	SamplePassMin int `json:"sample_pass_min"`
+	// ModelQuestionPct is how many questions out of 100 come from the model-written
+	// kinds (geography, element, currency) while the question writer has questions
+	// waiting; with none waiting every question is code-written. Absent means
+	// DefaultModelQuestionPct; 0 asks no model-written questions at all.
+	ModelQuestionPct *int `json:"model_question_pct"`
 	// ObservationDays is how long hourly directory snapshots are kept. The
 	// eventual "was this node public all day" rule reads them, so it outlives
 	// the 15-day claim window.
@@ -285,6 +290,25 @@ func DefaultConfig() Config {
 // operator who wants the full slot has said so explicitly.
 func (c Config) FireLead() time.Duration { return fireBound(c.FireLeadSec, DefaultFireLead) }
 func (c Config) FireTail() time.Duration { return fireBound(c.FireTailSec, DefaultFireTail) }
+
+// DefaultModelQuestionPct is the share of model-written questions when the writer is
+// there, out of 100.
+const DefaultModelQuestionPct = 30
+
+// ModelQuestionShare is ModelQuestionPct as a number from 0 to 100.
+func (c Config) ModelQuestionShare() int {
+	if c.ModelQuestionPct == nil {
+		return DefaultModelQuestionPct
+	}
+	n := *c.ModelQuestionPct
+	if n < 0 {
+		return 0
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
+}
 
 // SamplePassNeeded is how many sampling rounds a node has to pass for its ticket:
 // SamplePassMin, DefaultSamplePassMin when unset, and never more than there are
@@ -950,12 +974,22 @@ func (p *Prober) refillQueue() {
 	// Code-written categories first: they need no engine, cannot fail, and
 	// cannot run dry, so the queue is never empty even when every writer is
 	// unreachable.
-	for _, spec := range codeSpecs {
-		if depth[spec.cat] >= p.cfg.QueueLowWater {
-			continue
+	byTier, err := p.store.QueueDepthTier()
+	if err != nil {
+		log.Printf("[probe] queue depth by tier: %v", err)
+	}
+	for _, spec := range stockedKinds() {
+		tiers := []int{0}
+		if spec.tiered {
+			tiers = []int{tierSmall, tierMiddle, tierLarge}
 		}
-		if _, err := p.store.AddQuestions(FillCode(spec, batchTarget, p.rng), now); err != nil {
-			log.Printf("[probe] refill %s: %v", spec.cat, err)
+		for _, tier := range tiers {
+			if byTier[spec.cat][tier] >= p.cfg.QueueLowWater {
+				continue
+			}
+			if _, err := p.store.AddQuestions(FillCode(spec, tier, batchTarget, p.rng), now); err != nil {
+				log.Printf("[probe] refill %s: %v", spec.cat, err)
+			}
 		}
 	}
 	// Everything below needs a writer — this node or an ally. With none the
@@ -1291,8 +1325,8 @@ func (p *Prober) collectRound(now time.Time, stats *roundStats) {
 //	across /24s       THE SAME question. Unrelated networks answering the same
 //	                  thing at the same moment is a free cross-check.
 func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, round int, stats *roundStats) {
-	questions := p.takeQuestions(questionsNeeded(groups, p.cfg.QuestionFanout), now)
-	if len(questions) == 0 {
+	assigned := p.assignQuestions(groups, now)
+	if len(assigned) == 0 {
 		log.Printf("[probe] question queue is empty — skipping this round")
 		return
 	}
@@ -1305,34 +1339,27 @@ func (p *Prober) fireTextGroups(groups [][]Target, now time.Time, round int, sta
 	// at the same instant.
 	sem := make(chan struct{}, maxConcurrentGroups)
 	var wg sync.WaitGroup
-	shot := 0 // running index across the whole round, assigned before launching
 	for _, g := range groups {
-		// Question i goes to shot i, i+N, i+2N … where N is the number of
-		// questions. Consecutive shots are the members of one group, so within
-		// a group every node gets a different question, while the same question
-		// lands on nodes from N-apart groups — different /24s by construction.
-		picked := make([]Question, len(g))
-		for i := range g {
-			picked[i] = questions[(shot+i)%len(questions)]
-		}
-		shot += len(g)
-
 		wg.Add(1)
-		go func(g []Target, qs []Question) {
+		go func(g []Target) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			var inner sync.WaitGroup
-			for i, t := range g {
+			for _, t := range g {
+				q, ok := assigned[targetKey(t)]
+				if !ok {
+					continue // no question was left for its tier
+				}
 				inner.Add(1)
 				go func(t Target, q Question) {
 					defer inner.Done()
 					p.fireOne(t, q, round, stats)
-				}(t, qs[i])
+				}(t, q)
 			}
 			inner.Wait()
-		}(g, picked)
+		}(g)
 	}
 	wg.Wait()
 }
@@ -1374,29 +1401,123 @@ func questionsNeeded(groups [][]Target, fanout int) int {
 // same moment.
 const maxConcurrentGroups = 16
 
-// takeQuestions draws n questions for this round, sampling categories by weight.
+// takeQuestions draws n questions for a node tier from the queue, one kind at a time
+// by the tier's mix (codeMix).
 //
-// A category that has run dry falls back to arithmetic, which is generated in
-// code and therefore always available. That keeps a missing engine from
-// stopping the round — at the cost of shifting the mix toward math, which the
-// refill path logs.
-func (p *Prober) takeQuestions(n int, now time.Time) []Question {
+// The model-written kinds join in only while the writer has questions waiting: that
+// stock is how "the writer is there and answering" is told, since those questions are
+// written ahead and the queue is all this sees. With none, every question is
+// code-written. With some, ModelQuestionShare of the questions come from them.
+//
+// A code-written kind that has run dry is made on the spot (makeNow), so a round is
+// never short of questions between refills. A model-written one cannot be, and the
+// draw goes on to the others.
+func (p *Prober) takeQuestions(n, tier int, now time.Time) []Question {
 	if n < 1 {
 		n = 1
 	}
+	var stock []Category
+	if depth, err := p.store.QueueDepth(); err != nil {
+		log.Printf("[probe] queue depth: %v", err)
+	} else {
+		for _, g := range genSpecs {
+			if depth[g.cat] > 0 {
+				stock = append(stock, g.cat)
+			}
+		}
+	}
+	pct := p.cfg.ModelQuestionShare()
+	dry := map[Category]bool{}
 	out := make([]Question, 0, n)
 	for len(out) < n {
-		q, ok, err := p.store.TakeQuestion(pickCategory(p.rng), now)
+		cat, ok := pickCategory(p.rng, tier, stock, pct, dry)
+		if !ok {
+			break
+		}
+		q, got, err := p.store.TakeQuestion(cat, tier, now)
 		if err != nil {
 			log.Printf("[probe] take question: %v", err)
 			break
 		}
-		if !ok {
-			if q, ok, err = p.store.TakeQuestion(CatMath, now); err != nil || !ok {
-				break // even arithmetic is gone; the refill will restock it
-			}
+		if !got {
+			q, got = p.makeNow(cat, tier, now)
+		}
+		if !got {
+			dry[cat] = true
+			continue
 		}
 		out = append(out, q)
+	}
+	return out
+}
+
+// makeNow writes one question of a code-written kind into the queue and takes it, for
+// a kind whose stock ran out. It keeps the rule that a question is asked once: what
+// the history already holds is not added, so a small table can run out, and then the
+// kind is given up for the round.
+func (p *Prober) makeNow(cat Category, tier int, now time.Time) (Question, bool) {
+	spec, ok := codeSpecFor(cat)
+	if !ok {
+		return Question{}, false
+	}
+	for i := 0; i < 30; i++ {
+		added, err := p.store.AddQuestions([]Question{spec.generate(p.rng, tier)}, now)
+		if err != nil {
+			log.Printf("[probe] make question: %v", err)
+			return Question{}, false
+		}
+		if added == 0 {
+			continue // asked within the history already
+		}
+		q, got, err := p.store.TakeQuestion(cat, tier, now)
+		if err != nil {
+			log.Printf("[probe] take question: %v", err)
+			return Question{}, false
+		}
+		return q, got
+	}
+	return Question{}, false
+}
+
+// targetKey names one target for the question it is given. A node can serve two text
+// services.
+func targetKey(t Target) string { return t.Node.ID + "|" + t.Service.Name }
+
+// assignQuestions draws the round's questions and says which target gets which.
+//
+// A target is asked by its tier (serviceTier: the parameter count it reports), so each tier's
+// nodes are drawn for separately, with the same sharing as before inside a tier:
+// question i goes to shots i, i+N, i+2N ..., the members of one /24 get different
+// questions, and the same question reaches nodes of different /24s.
+func (p *Prober) assignQuestions(groups [][]Target, now time.Time) map[string]Question {
+	out := map[string]Question{}
+	for tier := tierSmall; tier <= tierLarge; tier++ {
+		var members [][]Target
+		for _, g := range groups {
+			var m []Target
+			for _, t := range g {
+				if serviceTier(t.Service) == tier {
+					m = append(m, t)
+				}
+			}
+			if len(m) > 0 {
+				members = append(members, m)
+			}
+		}
+		if len(members) == 0 {
+			continue
+		}
+		questions := p.takeQuestions(questionsNeeded(members, p.cfg.QuestionFanout), tier, now)
+		if len(questions) == 0 {
+			continue
+		}
+		shot := 0
+		for _, g := range members {
+			for i, t := range g {
+				out[targetKey(t)] = questions[(shot+i)%len(questions)]
+			}
+			shot += len(g)
+		}
 	}
 	return out
 }

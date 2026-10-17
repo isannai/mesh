@@ -25,5 +25,6 @@
   "db": "db/probe.db",
   "queue_low_water": 10,
   "observation_days": 30,
-  "sample_pass_min": 2
+  "sample_pass_min": 2,
+  "model_question_pct": 30
 }

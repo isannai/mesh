@@ -44,16 +44,18 @@ OPTIONS
   shots are printed. A value option takes two dashes, a switch takes one.
 
 THE TABLE
-  ID       the shot's number, for --id
-  TIME     when it was fired (month-day hour:minute:second)
-  EPOCH    the slot it was fired in (3 hours; the slot starts at 00, 03, ... 21)
-  NODE     the node asked (cut to 12 characters)
-  ROUND    which of the slot's 3 quiz rounds this was; - for a picture
-  LATENCY  from submit to the answer in hand
-  TOKENS   tokens in the answer
-  GOT      the answer received, cut short
-  RESULT   pass, fail or truncated when it was judged; otherwise how it ended
-           (timeout, refused, queue_full, skipped, submitted)
+  ID         the shot's number, for --id
+  TIME(UTC)  when it was fired, in UTC whatever this machine's zone is
+             (month-day hour:minute:second)
+  EPOCH      the slot it was fired in (3 hours, counted in UTC: the slot
+             starts at 00, 03, ... 21 UTC)
+  NODE       the node asked (cut to 12 characters)
+  ROUND      which of the slot's 3 quiz rounds this was; - for a picture
+  LATENCY    from submit to the answer in hand
+  TOKENS     tokens in the answer
+  GOT        the answer received, cut short
+  RESULT     pass, fail or truncated when it was judged; otherwise how it ended
+             (timeout, refused, queue_full, skipped, submitted)
 
 EXAMPLES
   bin\probe.exe --report 20

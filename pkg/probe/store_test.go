@@ -33,7 +33,7 @@ func TestTakeQuestionConsumes(t *testing.T) {
 
 	seen := map[string]bool{}
 	for i := 0; i < 2; i++ {
-		q, ok, err := s.TakeQuestion(CatMath, now)
+		q, ok, err := s.TakeQuestion(CatMath, 0, now)
 		if err != nil || !ok {
 			t.Fatalf("take %d: ok=%v err=%v", i, ok, err)
 		}
@@ -45,7 +45,7 @@ func TestTakeQuestionConsumes(t *testing.T) {
 			t.Errorf("few-shot lost in round trip: %+v", q.Fewshot)
 		}
 	}
-	if _, ok, err := s.TakeQuestion(CatMath, now); ok || err != nil {
+	if _, ok, err := s.TakeQuestion(CatMath, 0, now); ok || err != nil {
 		t.Errorf("queue should be empty: ok=%v err=%v", ok, err)
 	}
 }
@@ -84,7 +84,7 @@ func TestAddQuestionsSkipsDuplicates(t *testing.T) {
 
 	// 🔴 Consumed questions still count. One asked last week is no fresher than
 	// one asked this morning, so the check must not look only at the queue.
-	if _, _, err := s.TakeQuestion(CatGeography, now); err != nil {
+	if _, _, err := s.TakeQuestion(CatGeography, 0, now); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.AddQuestions(batch, now); err != nil || n != 0 {
@@ -116,7 +116,7 @@ func TestQueueDepth(t *testing.T) {
 	if d[CatMath] != 2 || d[CatUnits] != 1 {
 		t.Fatalf("depth = %+v", d)
 	}
-	if _, _, err := s.TakeQuestion(CatMath, now); err != nil {
+	if _, _, err := s.TakeQuestion(CatMath, 0, now); err != nil {
 		t.Fatal(err)
 	}
 	d, _ = s.QueueDepth()

@@ -24,20 +24,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/isannai/mesh/pkg/rvnodes"
 )
 
-// Category is a question kind. The mix is weighted toward math because it is
-// the only one whose answer is certain.
+// Category is a question kind. Each kind has its own generator and its own stock in
+// the queue, and the mix below says how often a node is asked each.
 type Category string
 
 const (
-	// Written in code. Certain answers, unbounded supply, and nothing a
-	// generator node could leak in advance.
-	CatMath     Category = "math"
-	CatSequence Category = "sequence"
-	CatUnits    Category = "units"
+	// Written in code. Certain answers, and nothing a generator node could leak in
+	// advance. The arithmetic and the sequence have an unbounded supply; the four
+	// after them are fixed tables (bank.go).
+	CatMath      Category = "math" // old rows only: queued before the kinds below existed
+	CatAddSub    Category = "addsub"
+	CatMul1      Category = "mul1"      // one digit x two digit
+	CatMul2      Category = "mul2"      // two digit x two digit
+	CatMul3      Category = "mul3"      // three digit x two digit
+	CatMul4      Category = "mul4"      // four digit x two digit
+	CatDiv       Category = "div"       // a division that comes out even
+	CatCompound  Category = "compound"  // a + b x c
+	CatCompound2 Category = "compound2" // a x b + c x d
+	CatBase      Category = "base"      // 2, 4, 8, 16 <-> 10
+	CatSequence  Category = "sequence"
+	CatUnits     Category = "units"
+	CatVerb      Category = "verb"
+	CatSIUnit    Category = "siunit"
+	CatISO       Category = "isocode"
+	CatDomain    Category = "domain"
 
 	// Written by a model.
 	CatGeography Category = "geography"
@@ -45,35 +62,159 @@ const (
 	CatCurrency  Category = "currency"
 )
 
-// categoryMix is the sampling weight per category.
-//
-// Code-generated categories carry the majority (55%) because their answers are
-// certain: a mismatch is the node's fault and never needs a re-check panel.
-//
-// 🔴 WHAT DECIDES A CATEGORY'S PLACE HERE IS ITS ANSWER SPACE, not how
-// interesting the question is. Two categories were removed outright for failing
-// that test:
-//
-//	animal   "how many legs" has four real answers. A node replying "four" to
-//	         everything scored about 40%.
-//	colour   about ten answers, so roughly 15% for free.
-//
-// No amount of extra QUESTIONS fixes a small ANSWER space — the guesser does
-// not read the question. Every category below has hundreds of possible answers
-// (capitals, elements, currencies) or unbounded ones (the numeric three).
-//
-// Binary-choice forms were considered and rejected for the same reason: "which
-// is larger, 47 or 74" hands out 50% to a coin.
-var categoryMix = []struct {
+// numericKinds are the kinds whose answer is one number and is compared as a number
+// (score.go). The base conversions are not here: their answers are digit strings
+// ("1011", "FF"), compared as words.
+var numericKinds = map[Category]bool{
+	CatMath: true, CatAddSub: true, CatMul1: true, CatMul2: true, CatMul3: true, CatMul4: true,
+	CatDiv: true, CatCompound: true, CatCompound2: true,
+}
+
+// mixEntry is one kind and its weight in a tier's mix.
+type mixEntry struct {
 	cat    Category
 	weight int
-}{
-	{CatMath, 35},
-	{CatSequence, 10},
-	{CatUnits, 10},
-	{CatGeography, 15},
-	{CatElement, 15},
-	{CatCurrency, 15},
+}
+
+// codeMix is what a node of each tier is asked, among the code-written kinds. Every
+// tier's weights add up to 100: 80 for arithmetic, 20 for the four tables.
+//
+// THE TIERS ARE A DIFFICULTY LADDER BY MODEL SIZE (modelTier). The quiz only asks
+// whether the node answers with a model that works, so an honest small model has to
+// get questions it can mostly solve, and a model that claims to be big and is not
+// has to get questions it cannot. The targets are about 50% (7B and below), 70% and
+// 90% of slots paid for a typical model of each tier, which is a pass rate of
+// about 0.50, 0.64 and 0.80 per question with two of three rounds needed.
+//
+// The weights come from measurements of Qwen2.5-1.5B (20 questions of each kind) and
+// qwen3-14b (10 of each), written up with the numbers in workspace
+// docs/todo/probe-기준노드-개발.md (PB-15). There is no 7B in them: the middle tier
+// is an interpolation, and the weights are to be read against the pass rates
+// --report shows once it is running.
+//
+// Fixed in the mix for every tier: base conversion is 20% of the code questions, and
+// each of the four tables 5%.
+var codeMix = map[int][]mixEntry{
+	1: {
+		{CatMul2, 20}, {CatMul3, 15}, {CatCompound, 15}, {CatBase, 20}, {CatSequence, 10},
+		{CatVerb, 5}, {CatSIUnit, 5}, {CatISO, 5}, {CatDomain, 5},
+	},
+	2: {
+		{CatAddSub, 10}, {CatMul2, 15}, {CatMul3, 10}, {CatCompound, 15}, {CatBase, 20}, {CatSequence, 10},
+		{CatVerb, 5}, {CatSIUnit, 5}, {CatISO, 5}, {CatDomain, 5},
+	},
+	3: {
+		{CatMul2, 5}, {CatMul3, 10}, {CatMul4, 10}, {CatCompound, 15}, {CatCompound2, 10}, {CatBase, 20}, {CatSequence, 10},
+		{CatVerb, 5}, {CatSIUnit, 5}, {CatISO, 5}, {CatDomain, 5},
+	},
+}
+
+// Tiers: 1 is a model under 7B (and any model whose size cannot be read), 2 is 7B up
+// to but not including 14B, 3 is 14B and up.
+const (
+	tierSmall  = 1
+	tierMiddle = 2
+	tierLarge  = 3
+)
+
+// sizeInName finds "14b", "1.5B", "7b" in a model name: a number straight in front of
+// a b that is not the start of a longer word. Only the FIRST such size is read, so
+// "qwen3-30b-a3b" is 30B whatever its active parameters are, and "Q4_K_M" or "bf16"
+// is no size at all. The tier sorts itself out by the pass rate if a name misleads.
+var sizeInName = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)b(?:[^a-z0-9]|$)`)
+
+// modelTier is the tier of a node by the size in its model's name. A name with no size
+// in it is the small tier: a node that gets questions too easy loses nothing, one that
+// gets them too hard loses its ticket.
+func modelTier(name string) int {
+	m := sizeInName.FindStringSubmatch(name)
+	if m == nil {
+		return tierSmall
+	}
+	b, err := strconv.ParseFloat(m[1], 64)
+	switch {
+	case err != nil:
+		return tierSmall
+	case b >= 14:
+		return tierLarge
+	case b >= 7:
+		return tierMiddle
+	}
+	return tierSmall
+}
+
+// serviceTier is the tier of a node service: by the parameter count the node reads off
+// its own weights (ModelClass: the core, which for a mixture of experts is the active
+// part, or the total when it reports no core), and by the size in the model's name
+// when it reports none. The count is the node's own word, but a node that claims a
+// bigger model than it runs only gets questions it cannot answer.
+func serviceTier(svc rvnodes.Service) int {
+	if c := svc.ModelClass; c != nil {
+		n := c.ParamsCore
+		if n == 0 {
+			n = c.ParamsTotal
+		}
+		if n > 0 {
+			switch {
+			case n >= 14_000_000_000:
+				return tierLarge
+			case n >= 7_000_000_000:
+				return tierMiddle
+			}
+			return tierSmall
+		}
+	}
+	return modelTier(svc.Model)
+}
+
+// clampTier keeps a tier inside the mix table.
+func clampTier(tier int) int {
+	if tier < tierSmall {
+		return tierSmall
+	}
+	if tier > tierLarge {
+		return tierLarge
+	}
+	return tier
+}
+
+// pickCategory samples the kind of one question for a node of this tier.
+//
+// modelStock is the model-written kinds that have questions waiting, and modelPct is
+// how many questions out of 100 come from them when any do. No stock means the
+// writer is absent or not answering, and every question is code-written. dry holds
+// kinds that have already come up empty this round. ok is false when nothing is left.
+func pickCategory(rng *rand.Rand, tier int, modelStock []Category, modelPct int, dry map[Category]bool) (Category, bool) {
+	var code []mixEntry
+	codeSum := 0
+	for _, e := range codeMix[clampTier(tier)] {
+		if !dry[e.cat] {
+			code = append(code, e)
+			codeSum += e.weight
+		}
+	}
+	var model []Category
+	for _, c := range modelStock {
+		if !dry[c] {
+			model = append(model, c)
+		}
+	}
+	switch {
+	case len(code) == 0 && len(model) == 0:
+		return "", false
+	case len(code) == 0:
+		return model[rng.Intn(len(model))], true
+	case len(model) > 0 && rng.Intn(100) < modelPct:
+		return model[rng.Intn(len(model))], true
+	}
+	n := rng.Intn(codeSum)
+	for _, e := range code {
+		if n < e.weight {
+			return e.cat, true
+		}
+		n -= e.weight
+	}
+	return code[len(code)-1].cat, true
 }
 
 // Question is one item of the queue.
@@ -89,6 +230,9 @@ type Question struct {
 	Q        string
 	Draft    string // the expected answer. For math it is certain; otherwise a draft
 	Fewshot  []QA   // exactly two, matching this category
+	// Tier is the model-size tier the question is for (modelTier), or 0 for one any
+	// node can be asked. Only the base conversions differ by tier.
+	Tier int
 }
 
 // QA is one few-shot example.
@@ -163,26 +307,57 @@ func (q Question) BuildPrompt() string {
 // math — generated in code
 // ---------------------------------------------------------------------------
 
-// mathFewshot are the examples shipped with every math question. Both answers
-// are numbers, which is the answer shape a math question wants.
+// mathFewshot are the examples shipped with an addition or a subtraction. Both
+// answers are numbers, which is the answer shape a math question wants.
 var mathFewshot = []QA{
 	{Q: "What is 12 + 7?", A: "19"},
 	{Q: "What is 40 - 15?", A: "25"},
 }
 
-// newMathQuestion builds an addition or subtraction, two or three digits.
+// The examples of the other kinds of sum. They travel with the question and have to
+// match its kind: a model shown only additions has been seen to answer a product with
+// a sum's habits. None of them is also a question the kind asks (codeSpec.generate
+// asks again when one comes up).
+var (
+	mulFewshot = []QA{
+		{Q: "What is 6 x 14?", A: "84"},
+		{Q: "What is 9 x 23?", A: "207"},
+	}
+	mul2Fewshot = []QA{
+		{Q: "What is 12 x 15?", A: "180"},
+		{Q: "What is 24 x 31?", A: "744"},
+	}
+	mul3Fewshot = []QA{
+		{Q: "What is 120 x 15?", A: "1800"},
+		{Q: "What is 214 x 31?", A: "6634"},
+	}
+	mul4Fewshot = []QA{
+		{Q: "What is 1200 x 15?", A: "18000"},
+		{Q: "What is 2140 x 31?", A: "66340"},
+	}
+	divFewshot = []QA{
+		{Q: "What is 84 / 7?", A: "12"},
+		{Q: "What is 135 / 9?", A: "15"},
+	}
+	compoundFewshot = []QA{
+		{Q: "What is 3 + 4 x 5?", A: "23"},
+		{Q: "What is 10 + 6 x 2?", A: "22"},
+	}
+	compound2Fewshot = []QA{
+		{Q: "What is 3 x 4 + 5 x 2?", A: "22"},
+		{Q: "What is 6 x 2 + 3 x 5?", A: "27"},
+	}
+)
+
+// newSumQuestion builds an addition or a subtraction, two or three digits.
 //
-// Multiplication is deliberately excluded: 3B-class models get two-digit
-// products wrong often enough that the question would measure model size rather
-// than whether the node is answering at all.
-//
-// Subtraction is ordered so the result is never negative — a minus sign is a
+// Subtraction is ordered so the result is never negative: a minus sign is a
 // second token and an extra way for a correct node to look wrong.
 //
 // Three-digit operands appear half the time. Two-digit alone gives 16,200
 // distinct questions, which sounds like plenty until the same node is probed
 // for months; adding the wider range costs nothing and takes it past 800,000.
-func newMathQuestion(rng *rand.Rand) Question {
+func newSumQuestion(rng *rand.Rand) Question {
 	lo, hi := 10, 99
 	if rng.Intn(2) == 0 {
 		lo, hi = 100, 999
@@ -193,7 +368,7 @@ func newMathQuestion(rng *rand.Rand) Question {
 
 	if rng.Intn(2) == 0 {
 		return Question{
-			Category: CatMath,
+			Category: CatAddSub,
 			Q:        fmt.Sprintf("What is %d + %d?", a, b),
 			Draft:    strconv.Itoa(a + b),
 			Fewshot:  mathFewshot,
@@ -203,11 +378,127 @@ func newMathQuestion(rng *rand.Rand) Question {
 		a, b = b, a
 	}
 	return Question{
-		Category: CatMath,
+		Category: CatAddSub,
 		Q:        fmt.Sprintf("What is %d - %d?", a, b),
 		Draft:    strconv.Itoa(a - b),
 		Fewshot:  mathFewshot,
 	}
+}
+
+// product builds "What is A x B?" with A in [aLo, aHi] and B in [bLo, bHi].
+func product(rng *rand.Rand, cat Category, aLo, aHi, bLo, bHi int, fewshot []QA) Question {
+	a := aLo + rng.Intn(aHi-aLo+1)
+	b := bLo + rng.Intn(bHi-bLo+1)
+	return Question{Category: cat, Q: fmt.Sprintf("What is %d x %d?", a, b), Draft: strconv.Itoa(a * b), Fewshot: fewshot}
+}
+
+// newMulQuestion: a one digit number (2 to 9) times a two digit one (10 to 99).
+func newMulQuestion(rng *rand.Rand) Question {
+	return product(rng, CatMul1, 2, 9, 10, 99, mulFewshot)
+}
+
+// newMul2Question: two digits times two digits (11 to 99 each).
+func newMul2Question(rng *rand.Rand) Question {
+	return product(rng, CatMul2, 11, 99, 11, 99, mul2Fewshot)
+}
+
+// newMul3Question: three digits (101 to 999) times two digits (11 to 99).
+func newMul3Question(rng *rand.Rand) Question {
+	return product(rng, CatMul3, 101, 999, 11, 99, mul3Fewshot)
+}
+
+// newMul4Question: four digits (1001 to 9999) times two digits (11 to 99).
+func newMul4Question(rng *rand.Rand) Question {
+	return product(rng, CatMul4, 1001, 9999, 11, 99, mul4Fewshot)
+}
+
+// newDivQuestion builds a division that comes out even: a divisor from 2 to 12 into a
+// two digit multiple of it. The dividend is made from the answer, never the other
+// way, so there is no remainder or fraction for a correct node to disagree about.
+func newDivQuestion(rng *rand.Rand) Question {
+	d := rng.Intn(11) + 2
+	q := rng.Intn(90) + 10
+	return Question{
+		Category: CatDiv,
+		Q:        fmt.Sprintf("What is %d / %d?", d*q, d),
+		Draft:    strconv.Itoa(q),
+		Fewshot:  divFewshot,
+	}
+}
+
+// newCompoundQuestion builds a + b x c: the product first, the way it is taught. A is
+// 2 to 30 and B and C are 2 to 9.
+func newCompoundQuestion(rng *rand.Rand) Question {
+	a, b, c := rng.Intn(29)+2, rng.Intn(8)+2, rng.Intn(8)+2
+	return Question{
+		Category: CatCompound,
+		Q:        fmt.Sprintf("What is %d + %d x %d?", a, b, c),
+		Draft:    strconv.Itoa(a + b*c),
+		Fewshot:  compoundFewshot,
+	}
+}
+
+// newCompound2Question builds a x b + c x d, each factor 2 to 19.
+func newCompound2Question(rng *rand.Rand) Question {
+	a, b, c, d := rng.Intn(18)+2, rng.Intn(18)+2, rng.Intn(18)+2, rng.Intn(18)+2
+	return Question{
+		Category: CatCompound2,
+		Q:        fmt.Sprintf("What is %d x %d + %d x %d?", a, b, c, d),
+		Draft:    strconv.Itoa(a*b + c*d),
+		Fewshot:  compound2Fewshot,
+	}
+}
+
+// baseSpec is one base and the two examples of each direction. The answers are digit
+// strings, compared as words (hex digits upper case; words() lowers both sides).
+type baseSpec struct {
+	base int
+	name string
+	to   []QA // from decimal into the base
+	from []QA // from the base into decimal
+}
+
+var baseSpecs = map[int]baseSpec{
+	2: {2, "binary",
+		[]QA{{Q: "What is 10 in binary?", A: "1010"}, {Q: "What is 25 in binary?", A: "11001"}},
+		[]QA{{Q: "What is 1010 in decimal, from binary?", A: "10"}, {Q: "What is 11001 in decimal, from binary?", A: "25"}}},
+	4: {4, "base 4",
+		[]QA{{Q: "What is 10 in base 4?", A: "22"}, {Q: "What is 25 in base 4?", A: "121"}},
+		[]QA{{Q: "What is 22 in decimal, from base 4?", A: "10"}, {Q: "What is 121 in decimal, from base 4?", A: "25"}}},
+	8: {8, "octal",
+		[]QA{{Q: "What is 10 in octal?", A: "12"}, {Q: "What is 25 in octal?", A: "31"}},
+		[]QA{{Q: "What is 12 in decimal, from octal?", A: "10"}, {Q: "What is 31 in decimal, from octal?", A: "25"}}},
+	16: {16, "hexadecimal",
+		[]QA{{Q: "What is 255 in hexadecimal?", A: "FF"}, {Q: "What is 100 in hexadecimal?", A: "64"}},
+		[]QA{{Q: "What is FF in decimal, from hexadecimal?", A: "255"}, {Q: "What is 64 in decimal, from hexadecimal?", A: "100"}}},
+}
+
+// baseChoices is which bases and what range of numbers a tier is asked. The small
+// tier gets binary and octal of a two digit number; the middle one adds hexadecimal
+// and three digits; the large one adds base 4. (Base 4, and hexadecimal back to
+// decimal, were solved by 0 of 10 and 1 of 10 by a 14B model: they are the top of
+// the ladder.)
+func baseChoices(tier int) (bases []int, lo, hi int) {
+	switch clampTier(tier) {
+	case tierLarge:
+		return []int{2, 4, 8, 16}, 100, 999
+	case tierMiddle:
+		return []int{2, 8, 16}, 100, 999
+	}
+	return []int{2, 8}, 10, 99
+}
+
+// newBaseQuestion builds a base conversion for a tier, one direction chosen at
+// random: a decimal number into the base, or the base back into decimal.
+func newBaseQuestion(rng *rand.Rand, tier int) Question {
+	bases, lo, hi := baseChoices(tier)
+	b := baseSpecs[bases[rng.Intn(len(bases))]]
+	n := lo + rng.Intn(hi-lo+1)
+	digits := strings.ToUpper(strconv.FormatInt(int64(n), b.base))
+	if rng.Intn(2) == 0 {
+		return Question{Category: CatBase, Q: fmt.Sprintf("What is %d in %s?", n, b.name), Draft: digits, Fewshot: b.to}
+	}
+	return Question{Category: CatBase, Q: fmt.Sprintf("What is %s in decimal, from %s?", digits, b.name), Draft: strconv.Itoa(n), Fewshot: b.from}
 }
 
 // sequenceFewshot shows the shape: a run of numbers, one number back.
@@ -219,7 +510,7 @@ var sequenceFewshot = []QA{
 // newSequenceQuestion builds an arithmetic run and asks for the next term.
 //
 // Arithmetic steps only — a geometric run reaches four digits by the fifth term
-// and turns into the multiplication question that is banned above.
+// and turns into a multiplication.
 //
 // The answer is an ordinary number, so the answer space is unbounded and a
 // guesser gets nothing. That is the whole reason this category exists: it adds
@@ -264,7 +555,7 @@ var unitConversions = []struct {
 //
 // It is multiplication, but only by 10, 100 or 1000 — appending zeros, which
 // even a small model does reliably. That is a different task from the two-digit
-// products the mix excludes.
+// products, which a small model gets about half of.
 func newUnitsQuestion(rng *rand.Rand) Question {
 	c := unitConversions[rng.Intn(len(unitConversions))]
 	n := rng.Intn(98) + 2 // 2..99
@@ -280,17 +571,89 @@ func newUnitsQuestion(rng *rand.Rand) Question {
 //
 // Collected in one table so the refill loop treats them uniformly. They share
 // three properties the model-written ones do not have: the answer is certain,
-// the supply is unbounded, and nothing about them can leak to whichever node
-// writes the other questions.
+// nothing about them can leak to whichever node writes the other questions, and they
+// keep working when every writer is unreachable.
 type codeSpec struct {
 	cat Category
-	gen func(*rand.Rand) Question
+	gen func(rng *rand.Rand, tier int) Question
+	// tiered says the question depends on the tier it is for (the base conversions),
+	// so the queue keeps them apart by tier. Every other kind is stocked once and
+	// shared (Question.Tier 0).
+	tiered bool
+}
+
+// generate makes one question of the kind for a tier. A question that comes out the
+// same as one of its own examples is made again: asking an example measures copying.
+func (s codeSpec) generate(rng *rand.Rand, tier int) Question {
+	var q Question
+	for i := 0; i < 10; i++ {
+		q = s.gen(rng, tier)
+		same := false
+		for _, ex := range q.Fewshot {
+			same = same || ex.Q == q.Q
+		}
+		if !same {
+			break
+		}
+	}
+	if s.tiered {
+		q.Tier = clampTier(tier)
+	} else {
+		q.Tier = 0
+	}
+	return q
+}
+
+// untiered adapts a generator that does not look at the tier.
+func untiered(f func(*rand.Rand) Question) func(*rand.Rand, int) Question {
+	return func(rng *rand.Rand, _ int) Question { return f(rng) }
 }
 
 var codeSpecs = []codeSpec{
-	{CatMath, newMathQuestion},
-	{CatSequence, newSequenceQuestion},
-	{CatUnits, newUnitsQuestion},
+	{cat: CatAddSub, gen: untiered(newSumQuestion)},
+	{cat: CatMul1, gen: untiered(newMulQuestion)},
+	{cat: CatMul2, gen: untiered(newMul2Question)},
+	{cat: CatMul3, gen: untiered(newMul3Question)},
+	{cat: CatMul4, gen: untiered(newMul4Question)},
+	{cat: CatDiv, gen: untiered(newDivQuestion)},
+	{cat: CatCompound, gen: untiered(newCompoundQuestion)},
+	{cat: CatCompound2, gen: untiered(newCompound2Question)},
+	{cat: CatBase, gen: newBaseQuestion, tiered: true},
+	{cat: CatSequence, gen: untiered(newSequenceQuestion)},
+	{cat: CatUnits, gen: untiered(newUnitsQuestion)},
+	{cat: CatVerb, gen: untiered(newVerbQuestion)},
+	{cat: CatSIUnit, gen: untiered(newSIUnitQuestion)},
+	{cat: CatISO, gen: untiered(newISOQuestion)},
+	{cat: CatDomain, gen: untiered(newDomainQuestion)},
+}
+
+// codeSpecFor finds the spec of a code-written kind.
+func codeSpecFor(cat Category) (codeSpec, bool) {
+	for _, s := range codeSpecs {
+		if s.cat == cat {
+			return s, true
+		}
+	}
+	return codeSpec{}, false
+}
+
+// stockedKinds are the code-written kinds some tier's mix asks for, with the tiers
+// that ask each, in table order: the kinds the queue has to be kept stocked with.
+func stockedKinds() []codeSpec {
+	var out []codeSpec
+	for _, s := range codeSpecs {
+		for _, mix := range codeMix {
+			found := false
+			for _, e := range mix {
+				found = found || e.cat == s.cat
+			}
+			if found {
+				out = append(out, s)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -395,20 +758,4 @@ func parseBatch(cat Category, raw string) []Question {
 		out = append(out, Question{Category: cat, Q: p.Q, Draft: p.A, Fewshot: fewshot})
 	}
 	return out
-}
-
-// pickCategory samples a category by weight.
-func pickCategory(rng *rand.Rand) Category {
-	total := 0
-	for _, m := range categoryMix {
-		total += m.weight
-	}
-	n := rng.Intn(total)
-	for _, m := range categoryMix {
-		if n < m.weight {
-			return m.cat
-		}
-		n -= m.weight
-	}
-	return CatMath
 }

@@ -189,13 +189,7 @@ func TestAQuizThreeTimesThenTheTicket(t *testing.T) {
 	p.firer = NewFirer(srv.URL)
 	var issued []string
 	issuedBy(p, &issued)
-	var qs []Question
-	for i := 0; i < 12; i++ {
-		qs = append(qs, Question{Category: CatMath, Q: fmt.Sprintf("What is %d - %d?", 2+i, i), Draft: "2"})
-	}
-	if _, err := p.store.AddQuestions(qs, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	stockAnswerable(t, p, 12)
 	start := compareSlotStart()
 	shotsOf := func() int {
 		n, _ := p.store.ShotCountsInSlot(compareEpoch)
@@ -345,13 +339,7 @@ func TestAGroupThroughAWholeSlot(t *testing.T) {
 	p.firer = NewFirer(srv.URL)
 	var issued []string
 	issuedBy(p, &issued)
-	var qs []Question
-	for i := 0; i < 16; i++ {
-		qs = append(qs, Question{Category: CatMath, Q: fmt.Sprintf("What is %d - %d?", 2+i, i), Draft: "2"})
-	}
-	if _, err := p.store.AddQuestions(qs, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	stockAnswerable(t, p, 16)
 	start := compareSlotStart()
 
 	p.fireRoundAt(start.Add(59*time.Minute + 50*time.Second))
@@ -374,5 +362,32 @@ func TestAGroupThroughAWholeSlot(t *testing.T) {
 	p.fireRoundAt(start.Add(2*time.Hour + 32*time.Minute))
 	if len(issued) != 4 {
 		t.Errorf("a later tick issued more: %v", issued)
+	}
+}
+
+// stockAnswerable fills the queue with perKind questions of every code-written kind
+// (the base conversions for each tier), each answered "2" by the fake nodes. The round
+// draws its kinds at random, so every kind it can draw has to have stock the fake nodes
+// can answer; a kind that ran dry would be made on the spot, with an answer they do not
+// know.
+func stockAnswerable(t *testing.T, p *Prober, perKind int) {
+	t.Helper()
+	var qs []Question
+	for _, spec := range codeSpecs {
+		tiers := []int{0}
+		if spec.tiered {
+			tiers = []int{tierSmall, tierMiddle, tierLarge}
+		}
+		for _, tier := range tiers {
+			for i := 0; i < perKind; i++ {
+				qs = append(qs, Question{
+					Category: spec.cat, Tier: tier, Draft: "2",
+					Q: fmt.Sprintf("What is %d - %d? (%s, tier %d)", 2+i, i, spec.cat, tier),
+				})
+			}
+		}
+	}
+	if _, err := p.store.AddQuestions(qs, time.Now()); err != nil {
+		t.Fatal(err)
 	}
 }

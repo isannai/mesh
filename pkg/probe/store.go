@@ -183,6 +183,9 @@ var addedColumns = []string{
 	// Which of the slot's two quiz rounds a text shot belongs to (quiz.go): 1 or
 	// 2. Rows from before the quiz was asked twice, and every image shot, keep 0.
 	`ALTER TABLE shot ADD COLUMN round INTEGER NOT NULL DEFAULT 0`,
+	// The model-size tier a queued question is for (question.go modelTier), 0 for one
+	// any node can be asked.
+	`ALTER TABLE question ADD COLUMN tier INTEGER NOT NULL DEFAULT 0`,
 }
 
 // addedIndexes are indexes on those columns. They cannot sit in the schema above:
@@ -245,8 +248,8 @@ func (s *Store) AddQuestions(qs []Question, now time.Time) (int, error) {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO question(category,q,draft_answer,fewshot,created_at)
-		SELECT ?,?,?,?,?
+		INSERT INTO question(category,q,draft_answer,fewshot,created_at,tier)
+		SELECT ?,?,?,?,?,?
 		 WHERE NOT EXISTS (SELECT 1 FROM question WHERE category = ? AND q = ?)`)
 	if err != nil {
 		return 0, err
@@ -255,7 +258,7 @@ func (s *Store) AddQuestions(qs []Question, now time.Time) (int, error) {
 
 	added := 0
 	for _, q := range qs {
-		res, err := stmt.Exec(string(q.Category), q.Q, q.Draft, encodeFewshot(q.Fewshot), now.UnixMilli(),
+		res, err := stmt.Exec(string(q.Category), q.Q, q.Draft, encodeFewshot(q.Fewshot), now.UnixMilli(), q.Tier,
 			string(q.Category), q.Q)
 		if err != nil {
 			return added, err
@@ -271,12 +274,14 @@ func (s *Store) AddQuestions(qs []Question, now time.Time) (int, error) {
 }
 
 // TakeQuestion removes one unconsumed question of the given category from the
-// queue and returns it. ok=false when that category is empty.
+// queue and returns it. ok=false when that category is empty. A question is for
+// every tier (Tier 0) or for one: tier is the tier being asked, and a question made
+// for another tier is not taken.
 //
 // Marking it consumed in the same transaction as reading it is the whole point:
 // a question must never be asked twice, because a repeat is a question whose
 // answer may already be known to the node being asked.
-func (s *Store) TakeQuestion(cat Category, now time.Time) (Question, bool, error) {
+func (s *Store) TakeQuestion(cat Category, tier int, now time.Time) (Question, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Question{}, false, err
@@ -288,10 +293,10 @@ func (s *Store) TakeQuestion(cat Category, now time.Time) (Question, bool, error
 		fewshot string
 	)
 	row := tx.QueryRow(
-		`SELECT id,category,q,draft_answer,fewshot FROM question
-		  WHERE consumed_at IS NULL AND category = ? ORDER BY id LIMIT 1`, string(cat))
+		`SELECT id,category,q,draft_answer,fewshot,tier FROM question
+		  WHERE consumed_at IS NULL AND category = ? AND (tier = 0 OR tier = ?) ORDER BY id LIMIT 1`, string(cat), tier)
 	var catStr string
-	if err := row.Scan(&q.ID, &catStr, &q.Q, &q.Draft, &fewshot); err != nil {
+	if err := row.Scan(&q.ID, &catStr, &q.Q, &q.Draft, &fewshot, &q.Tier); err != nil {
 		if err == sql.ErrNoRows {
 			return Question{}, false, nil
 		}
@@ -324,6 +329,29 @@ func (s *Store) QueueDepth() (map[Category]int, error) {
 			return nil, err
 		}
 		out[Category(c)] = n
+	}
+	return out, rows.Err()
+}
+
+// QueueDepthTier counts unconsumed questions per category and tier, for the kinds that
+// are stocked once per tier.
+func (s *Store) QueueDepthTier() (map[Category]map[int]int, error) {
+	rows, err := s.db.Query(`SELECT category, tier, COUNT(*) FROM question WHERE consumed_at IS NULL GROUP BY category, tier`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[Category]map[int]int{}
+	for rows.Next() {
+		var c string
+		var tier, n int
+		if err := rows.Scan(&c, &tier, &n); err != nil {
+			return nil, err
+		}
+		if out[Category(c)] == nil {
+			out[Category(c)] = map[int]int{}
+		}
+		out[Category(c)][tier] = n
 	}
 	return out, rows.Err()
 }

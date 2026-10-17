@@ -29,7 +29,7 @@ func TestHelpMentionsEveryFlag(t *testing.T) {
 
 // The columns of the table are explained where the table is described.
 func TestHelpNamesTheTableColumns(t *testing.T) {
-	for _, col := range []string{"ID", "TIME", "EPOCH", "NODE", "ROUND", "LATENCY", "TOKENS", "GOT", "RESULT"} {
+	for _, col := range []string{"ID", "TIME(UTC)", "EPOCH", "NODE", "ROUND", "LATENCY", "TOKENS", "GOT", "RESULT"} {
 		if !strings.Contains(helpText, "  "+col+" ") {
 			t.Errorf("the help does not explain the %s column", col)
 		}

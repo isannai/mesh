@@ -292,3 +292,30 @@ func TestReportFiltersByEpoch(t *testing.T) {
 		t.Errorf("an empty search: err=%v\n%s", err, out)
 	}
 }
+
+// 🔴 THE TIME IS UTC, whatever zone the machine is in. The slots are counted in UTC
+// and the column says so; showing the local clock under a UTC label, or the other way
+// round, put the report an offset away from every other node's.
+func TestReportShowsUTCWhateverTheLocalZone(t *testing.T) {
+	was := time.Local
+	time.Local = time.FixedZone("KST", 9*3600)
+	defer func() { time.Local = was }()
+
+	s := newTestStore(t)
+	at := time.Date(2026, 10, 17, 7, 24, 18, 0, time.UTC) // 16:24:18 in KST
+	id, err := s.RecordShot(Shot{FiredAt: at, NodeID: "S:0xabcdef0123456789", Outcome: OutcomeTimeout, Round: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Report(ReportOptions{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "TIME(UTC)") {
+		t.Errorf("the column is not labelled UTC:\n%s", out)
+	}
+	line := shotLine(t, out, id)
+	if !strings.Contains(line, "10-17 07:24:18") || strings.Contains(line, "16:24:18") {
+		t.Errorf("the time is not UTC:\n%s", line)
+	}
+}

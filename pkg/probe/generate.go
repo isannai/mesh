@@ -63,21 +63,17 @@ func NewGenerator(isanndURL string, entries []poolEntry) *Generator {
 	}
 }
 
-// FillCode returns n freshly generated questions of a code-written category.
+// FillCode returns n freshly generated questions of a code-written category for a
+// tier (ignored by the kinds that do not depend on it).
 //
 // Duplicates are not filtered here — the store drops them on insert, and
 // filtering twice would only hide how often the generator repeats itself.
-func FillCode(spec codeSpec, n int, rng *rand.Rand) []Question {
+func FillCode(spec codeSpec, tier, n int, rng *rand.Rand) []Question {
 	out := make([]Question, 0, n)
 	for i := 0; i < n; i++ {
-		out = append(out, spec.gen(rng))
+		out = append(out, spec.generate(rng, tier))
 	}
 	return out
-}
-
-// FillMath returns n freshly generated arithmetic questions.
-func FillMath(n int, rng *rand.Rand) []Question {
-	return FillCode(codeSpecs[0], n, rng)
 }
 
 // HasEngine reports whether LLM-backed categories can be produced at all.

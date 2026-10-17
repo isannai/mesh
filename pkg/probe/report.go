@@ -15,6 +15,18 @@ import (
 	"github.com/isannai/mesh/pkg/faucet"
 )
 
+// queueKinds is every kind the queue can hold, in the order the report lists them.
+func queueKinds() []Category {
+	out := []Category{CatMath}
+	for _, s := range codeSpecs {
+		out = append(out, s.cat)
+	}
+	for _, g := range genSpecs {
+		out = append(out, g.cat)
+	}
+	return out
+}
+
 // ReportOptions says what Report prints.
 type ReportOptions struct {
 	Limit  int    // shots to list; 20 when unset
@@ -52,7 +64,7 @@ func (s *Store) Report(o ReportOptions) (string, error) {
 	if len(depth) == 0 {
 		fmt.Fprintf(&b, "  empty — nothing has been generated yet\n")
 	}
-	for _, c := range []Category{CatMath, CatSequence, CatUnits, CatGeography, CatElement, CatCurrency} {
+	for _, c := range queueKinds() {
 		if n := depth[c]; n > 0 {
 			fmt.Fprintf(&b, "  %-10s %d\n", c, n)
 		}
@@ -93,7 +105,7 @@ func (s *Store) Report(o ReportOptions) (string, error) {
 		fmt.Fprintf(&b, "  none — the directory has not been read yet\n")
 	} else {
 		fmt.Fprintf(&b, "  %d rows, %d nodes, %s → %s\n", n, distinct,
-			time.UnixMilli(firstMs).Format("15:04:05"), time.UnixMilli(lastMs).Format("15:04:05"))
+			time.UnixMilli(firstMs).UTC().Format("15:04:05"), time.UnixMilli(lastMs).UTC().Format("15:04:05 UTC"))
 		// Time present is what the schedule measures against, so it belongs next
 		// to the raw counts. It is a TOTAL across gaps, not a run length: a node
 		// that was up all morning, off for lunch and back since is credited with
@@ -201,10 +213,13 @@ func (s *Store) writeShots(b *strings.Builder, o ReportOptions) error {
 
 	var table strings.Builder
 	tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tTIME\tEPOCH\tNODE\tROUND\tLATENCY\tTOKENS\tGOT\tRESULT")
+	fmt.Fprintln(tw, "ID\tTIME(UTC)\tEPOCH\tNODE\tROUND\tLATENCY\tTOKENS\tGOT\tRESULT")
 	for _, r := range shots {
+		// UTC, not the machine's zone: the slots (EPOCH) are counted in UTC, and an
+		// operator reading this next to another node's report, or the RV's, should
+		// see the same clock.
 		fmt.Fprintf(tw, "%d\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.id, time.UnixMilli(r.firedMs).Format("01-02 15:04:05"), r.slotOf(), short(r.node),
+			r.id, time.UnixMilli(r.firedMs).UTC().Format("01-02 15:04:05"), r.slotOf(), short(r.node),
 			dashIf(r.round > 0, fmt.Sprint(r.round)), dashIf(r.latency > 0, fmt.Sprintf("%dms", r.latency)),
 			dashIf(r.tokens > 0, fmt.Sprint(r.tokens)), r.gotCell(), r.result())
 	}

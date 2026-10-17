@@ -48,7 +48,7 @@ const (
 // must not have every wrong answer excused.
 func Score(q Question, answer string, completionTokens int) string {
 	matched := false
-	if q.Category == CatMath {
+	if numericKinds[q.Category] {
 		matched = mathMatches(q.Draft, answer)
 	} else {
 		matched = wordsMatch(q.Draft, answer)
