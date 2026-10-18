@@ -133,6 +133,17 @@ var imageExtensions = map[string]string{
 	".ico": "image/x-icon", ".bmp": "image/bmp",
 }
 
+// pathInsideDir reports whether p is dir itself or lies below it. It compares path
+// elements, not characters: with dir D:\isann the string prefix check also let
+// D:\isann-other\x.png through, because "D:\isann-other" starts with "D:\isann".
+func pathInsideDir(dir, p string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(p))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (p *Provider) handleServeFile(stream quic.Stream, req *http.Request) {
 	stream.SetWriteDeadline(time.Now().Add(1 * time.Minute))
 
@@ -166,7 +177,7 @@ func (p *Provider) handleServeFile(stream quic.Stream, req *http.Request) {
 	}
 
 	// path traversal 방지: homeDir 밖 접근 차단
-	if !strings.HasPrefix(absPath, filepath.Clean(homeDir)) {
+	if !pathInsideDir(homeDir, absPath) {
 		writeHTTPResponse(stream, 403, "application/json", []byte(`{"error":"access denied"}`))
 		return
 	}

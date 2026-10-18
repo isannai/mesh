@@ -438,14 +438,20 @@ func TestJobsHandlerByID(t *testing.T) {
 	}
 
 	// GET status
-	r2, _ := http.Get(srv.URL + "/v1/jobs/" + sr.JobID)
+	r2, err := http.Get(srv.URL + "/v1/jobs/" + sr.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer r2.Body.Close()
 	if r2.StatusCode != http.StatusOK {
 		t.Errorf("status = %d", r2.StatusCode)
 	}
 
 	// GET result
-	r3, _ := http.Get(srv.URL + "/v1/jobs/" + sr.JobID + "/result")
+	r3, err := http.Get(srv.URL + "/v1/jobs/" + sr.JobID + "/result")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer r3.Body.Close()
 	bs, _ := io.ReadAll(r3.Body)
 	if string(bs) != "payload" {
@@ -463,7 +469,10 @@ func TestJobsHandlerStats(t *testing.T) {
 	// Trigger queue creation
 	h.mgr.GetOrCreate(setup.ServiceEntry{Name: "sd-api"})
 
-	resp, _ := http.Get(srv.URL + "/v1/queue/stats?service=sd-api")
+	resp, err := http.Get(srv.URL + "/v1/queue/stats?service=sd-api")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d", resp.StatusCode)
@@ -474,6 +483,50 @@ func TestJobsHandlerStats(t *testing.T) {
 	_ = got
 }
 
+// A service that has not had a job yet is in the stats with zeros, and asking
+// does not make its queue.
+func TestJobsHandlerStatsListsIdleServices(t *testing.T) {
+	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer engine.Close()
+	h, srv := newTestHandler(t, engine)
+	h.SetServices([]setup.ServiceEntry{{Name: "sd-api", Addr: "ignored"}, {Name: "llm-api", Addr: "ignored"}})
+
+	get := func() map[string]queue.Stats {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/v1/queue/stats")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var got map[string]queue.Stats
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	got := get()
+	if len(got) != 2 {
+		t.Fatalf("stats = %v, want sd-api and llm-api, both idle", got)
+	}
+	for _, name := range []string{"sd-api", "llm-api"} {
+		if s, ok := got[name]; !ok || s != (queue.Stats{}) {
+			t.Errorf("%s = %+v (listed %v), want listed with zeros", name, s, ok)
+		}
+	}
+	if n := h.mgr.Len(); n != 0 {
+		t.Errorf("queues made by reading the stats = %d, want 0", n)
+	}
+
+	// Once a queue exists, its own stats win over the placeholder.
+	q := h.mgr.GetOrCreate(setup.ServiceEntry{Name: "sd-api"})
+	if got := get(); len(got) != 2 || got["sd-api"] != q.Stats() {
+		t.Errorf("after the queue exists: %v, want 2 services with sd-api = %+v", got, q.Stats())
+	}
+}
+
 func TestJobsHandlerOutputsMissingFallsBackTo404(t *testing.T) {
 	// No storage, no job with this ID → /outputs/{name} should fall through
 	// to 404 (was 503 before the in-memory fallback was added).
@@ -481,7 +534,10 @@ func TestJobsHandlerOutputsMissingFallsBackTo404(t *testing.T) {
 	defer engine.Close()
 	_, srv := newTestHandler(t, engine)
 
-	resp, _ := http.Get(srv.URL + "/outputs/anything.png")
+	resp, err := http.Get(srv.URL + "/outputs/anything.png")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 (no storage, no in-memory job)", resp.StatusCode)
@@ -506,7 +562,10 @@ func TestJobsHandlerOutputsTraversalGuarded(t *testing.T) {
 	defer srv.Close()
 
 	// /outputs/../etc/passwd should be blocked.
-	resp, _ := http.Get(srv.URL + "/outputs/..%2F..%2Fetc%2Fpasswd")
+	resp, err := http.Get(srv.URL + "/outputs/..%2F..%2Fetc%2Fpasswd")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
 		t.Error("traversal should not succeed")

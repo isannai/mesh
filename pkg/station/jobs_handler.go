@@ -782,11 +782,28 @@ func (h *JobsHandler) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.URL.Query().Get("service")
 	if name == "" {
-		// No name → AllStats snapshot.
-		writeJSON(w, http.StatusOK, h.mgr.AllStats())
+		// No name → every service, busy or idle.
+		writeJSON(w, http.StatusOK, h.allStats())
 		return
 	}
 	writeJSON(w, http.StatusOK, h.mgr.Stats(name))
+}
+
+// allStats is the stats of every service this station serves. A queue is made
+// on a service's first job (queue.Manager.GetOrCreate), so the manager alone
+// leaves an idle service out of its answer. A service with no queue yet gets the
+// stats a fresh queue has: all zero. No queue is made here, so nothing starts
+// before the first job.
+func (h *JobsHandler) allStats() map[string]queue.Stats {
+	out := h.mgr.AllStats()
+	h.svcMu.RLock()
+	defer h.svcMu.RUnlock()
+	for _, s := range h.services {
+		if _, ok := out[s.Name]; !ok {
+			out[s.Name] = queue.Stats{}
+		}
+	}
+	return out
 }
 
 // lookupService returns the ServiceEntry by name. False when not found.

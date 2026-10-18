@@ -5,13 +5,40 @@ package manifest
 // api.run 스키마가 온전한지 회귀 검증. JSON 오타나 잘못된 type/modality 를 CI 에서 즉시 잡는다.
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
 
+// stagedEnginesDir finds the engine manifests the GLink package ships. They live in the
+// GLink repo (package-stage/), not in this one, so the lookup is: $ISANN_PACKAGE_STAGE,
+// then a package-stage next to this repo's root (the old shared layout), then a GLink
+// checkout beside the workspace (<workspace>/GLink and <workspace>/isann/mesh).
+func stagedEnginesDir() (string, bool) {
+	tail := []string{"isann", "artifacts", "addon", "engines"}
+	var roots []string
+	if v := os.Getenv("ISANN_PACKAGE_STAGE"); v != "" {
+		roots = append(roots, v)
+	}
+	roots = append(roots,
+		filepath.Join("..", "..", "..", "package-stage"),
+		filepath.Join("..", "..", "..", "..", "..", "GLink", "package-stage"),
+		filepath.Join("..", "..", "..", "..", "GLink", "package-stage"))
+	for _, r := range roots {
+		dir := filepath.Join(append([]string{r}, tail...)...)
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
 func TestShippedManifestsValid(t *testing.T) {
-	// pkg/engine/manifest → repo root 는 3단계 위. 엔진 manifest 는 apps/ 트리.
-	base := filepath.Join("..", "..", "..", "package-stage", "isann", "artifacts", "addon", "engines")
+	// 엔진 manifest 는 GLink 저장소의 package-stage 에 있다 (이 저장소에는 없다).
+	base, ok := stagedEnginesDir()
+	if !ok {
+		t.Skip("package-stage (GLink) not found: check out GLink beside this repo or set ISANN_PACKAGE_STAGE")
+	}
 
 	cases := []struct {
 		engine    string

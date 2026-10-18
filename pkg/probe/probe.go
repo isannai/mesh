@@ -394,12 +394,20 @@ func LoadConfig(path string) (Config, error) {
 	if path == "" {
 		path = os.Getenv("ISANN_MESH_CONFIG")
 	}
+	// A path somebody named (--config, ISANN_MESH_CONFIG) that is not there is
+	// said out loud: a typo in it otherwise runs the prober on the built-in
+	// defaults without a word. The implicit conf/probe.json stays quiet, since
+	// an absent file is a normal state.
+	named := path != ""
 	if path == "" {
 		path = filepath.Join("conf", "probe.json")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return cfg, err
+	}
+	if err != nil && named {
+		log.Printf("[probe] config %s not found: running on the built-in defaults", path)
 	}
 	if err == nil {
 		if err := json.Unmarshal(data, &cfg); err != nil {

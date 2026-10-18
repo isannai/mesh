@@ -190,7 +190,10 @@ func TestSubmitRunMapping_NoSchema(t *testing.T) {
 	srv := newMappingHandler(t, engine, nil) // resolver 가 "sd-api" 에도 nil 반환
 
 	reqBody := `{"service":"sd-api","run":{"prompt":"x"},"wait":true}`
-	resp, _ := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (no api.run schema)", resp.StatusCode)
@@ -205,7 +208,10 @@ func TestSubmitRunMapping_RequiredMissing(t *testing.T) {
 	srv := newMappingHandler(t, engine, mappingRunSpec())
 
 	reqBody := `{"service":"sd-api","run":{"steps":10},"wait":true}`
-	resp, _ := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
+	resp, err := http.Post(srv.URL+"/svc/sd-api/v1/jobs", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (missing required prompt)", resp.StatusCode)

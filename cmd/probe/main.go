@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/isannai/mesh/pkg/probe"
 	"github.com/isannai/mesh/pkg/setup"
@@ -63,10 +64,44 @@ func defineFlags(fs *flag.FlagSet) *options {
 	}
 }
 
+// checkOptions refuses option values that would otherwise fall through to the
+// bottom of main and START THE PROBER. Every read option is "0 / empty means not
+// given", so `--report 0`, `--id 0`, `--epoch -1`, `--slots 0`, `--node=` or a
+// lone `-a` used to skip every branch above and run the prober in the foreground
+// (with a database and an isannd it then really fires). Asking to read
+// something and getting a second prober is the wrong answer; say what is wrong.
+func checkOptions(fs *flag.FlagSet, o *options) error {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if set["report"] && *o.report < 1 {
+		return fmt.Errorf("--report needs a number of 1 or more, got %d", *o.report)
+	}
+	if set["id"] && *o.shotID < 1 {
+		return fmt.Errorf("--id needs a shot number of 1 or more, got %d", *o.shotID)
+	}
+	if set["epoch"] && *o.epoch < 1 {
+		return fmt.Errorf("--epoch needs an epoch number of 1 or more, got %d", *o.epoch)
+	}
+	if set["slots"] && *o.slotsN < 1 {
+		return fmt.Errorf("--slots needs a number of 1 or more, got %d", *o.slotsN)
+	}
+	if set["node"] && strings.TrimSpace(*o.node) == "" {
+		return fmt.Errorf("--node needs some text of a node id (a prefix such as 0xbada8be8 is enough)")
+	}
+	if set["a"] && !set["report"] && !set["id"] && !set["node"] && !set["epoch"] {
+		return fmt.Errorf("-a only adds detail to --report, --id, --node or --epoch")
+	}
+	return nil
+}
+
 func main() {
 	opt := defineFlags(flag.CommandLine)
 	flag.Usage = func() { fmt.Fprint(os.Stderr, helpText) }
 	flag.Parse()
+	if err := checkOptions(flag.CommandLine, opt); err != nil {
+		fmt.Fprintf(os.Stderr, "probe: %v (try: probe.exe help)\n", err)
+		os.Exit(2)
+	}
 
 	// `probe.exe help` and -h / --help print the same text, and need no config.
 	if flag.Arg(0) == "help" {

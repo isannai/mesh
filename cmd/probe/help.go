@@ -44,6 +44,9 @@ OPTIONS
 
   --id, --node and --epoch can be combined, and with any of them only the
   shots are printed. A value option takes two dashes, a switch takes one.
+  A number must be 1 or more and --node needs some text; 0, a negative number,
+  an empty --node, or -a without a read option is refused (exit 2) instead of
+  starting the prober.
 
 THE TABLE
   ID         the shot's number, for --id
