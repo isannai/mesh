@@ -152,6 +152,11 @@ func (p *Provider) reconcileService(svc setup.ServiceEntry, alive bool, info set
 	p.svcStateMu.Unlock()
 
 	p.emitServiceEvent(svc, nextPhase, info, runningPID)
+	// A service that was not advertised while it was down (see buildRegisterMsg)
+	// is only a name at the RV after these events. Send the whole entry now.
+	if nextPhase == "starting" || nextPhase == "ready" {
+		p.requestRegister()
+	}
 }
 
 func (p *Provider) emitServiceEvent(svc setup.ServiceEntry, phase string, info setup.ServiceInfo, runningPID int) {

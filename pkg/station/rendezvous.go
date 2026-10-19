@@ -124,25 +124,11 @@ func (p *Provider) buildRegisterMsg() *tunnel.RendezvousMsg {
 	for _, svc := range svcs {
 		info, alive, busy, apiBody := pollServiceWithAPI(svc, p.PackagesDir)
 		if !alive {
-			// Stopped services still need a card on broker UI with a Start
-			// button. Carry the manifest's launcher so the UI knows whether
-			// to render Start/Stop (docker) or "externally managed"
-			// (external) — pollServiceWithAPI doesn't run for !alive so we
-			// load the manifest directly here. ServerLoading은 PID 트래킹
-			// (engine-runner 시절) 신호 — 컨테이너 패턴엔 의미 없어서 false.
-			launcher := ""
-			if mf := loadServiceManifest(svc, p.PackagesDir); mf != nil {
-				launcher = mf.Launcher
-				if launcher == "" {
-					launcher = "external"
-				}
-			}
-			services = append(services, setup.ServiceInfo{
-				Name:     svc.Name,
-				Type:     svc.Type,
-				Engine:   svc.Engine,
-				Launcher: launcher,
-			})
+			// An engine that is not up is not advertised: the directory lists what
+			// can take a request. When it comes up, reconcileService asks for a
+			// register right away (requestRegister), so the RV gets the whole entry
+			// (engine, model, queue shape, options) then, not at the next scheduled
+			// register. Until then it is only a name in this node's config.
 			continue
 		}
 
@@ -342,6 +328,7 @@ func (p *Provider) startIsanndForwarder(ctx context.Context) {
 		for {
 			select {
 			case <-time.After(next):
+			case <-p.resyncCh: // an engine came up: register now
 			case <-ctx.Done():
 				return
 			}

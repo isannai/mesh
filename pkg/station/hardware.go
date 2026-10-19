@@ -187,14 +187,23 @@ func pollServiceViaIsannd(containerName string, info setup.ServiceInfo) (setup.S
 	var reply struct {
 		HTTPOK bool   `json:"http_ok"`
 		Model  string `json:"model,omitempty"`
+		// EngineStarted: isannd started this engine and has not stopped it
+		// (absent from an older isannd, or for an engine it does not manage).
+		EngineStarted *bool `json:"engine_started,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
 		logManifestErrOnce(info.Name+":probe", "[station] dockerProbe %q decode: %v", containerName, err)
 		return info, false, false, nil
 	}
-	info.Model = reply.Model
-	info.ServerReady = reply.HTTPOK
-	return info, reply.HTTPOK, false, nil
+	// Ready = the engine answers AND it was started (not stopped since). An
+	// answer from something else at the engine's address does not make a stopped
+	// engine ready. No engine_started (older isannd) = trust the answer, as before.
+	ready := reply.HTTPOK && (reply.EngineStarted == nil || *reply.EngineStarted)
+	if ready {
+		info.Model = reply.Model
+	}
+	info.ServerReady = ready
+	return info, ready, false, nil
 }
 
 func pollServiceExternal(svc setup.ServiceEntry, packagesDir string) (info setup.ServiceInfo, alive bool, busy bool, apiBody []byte) {

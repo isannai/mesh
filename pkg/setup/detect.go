@@ -408,6 +408,9 @@ type ServiceInfo struct {
 	Inspect       map[string]string `json:"inspect,omitempty"`        // {key: value}
 	InspectLabels map[string]string `json:"inspect_labels,omitempty"` // {key: human label}
 	InspectOrder  []string          `json:"inspect_order,omitempty"`  // manifest declaration order
+	// Inspects is the three fields above as one list in display order
+	// (inspects.go). A node fills the three; the list is derived from them.
+	Inspects []InspectItem `json:"inspects,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

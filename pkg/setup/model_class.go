@@ -44,4 +44,32 @@ type ModelClass struct {
 	ParamsCore int64 `json:"params_core,omitempty"`
 	// ParamsTotal counts every weight in the file(s), embeddings included.
 	ParamsTotal int64 `json:"params_total,omitempty"`
+
+	// What follows is the shape of a transformer, read from the same headers
+	// (GGUF "<arch>.<key>", HF config.json). Each is 0 = the file does not say
+	// (an image checkpoint has none of them, and a converter may leave a key
+	// out), never "zero layers".
+	//
+	// Layers is the number of transformer blocks (GGUF block_count, HF
+	// num_hidden_layers).
+	Layers int `json:"layers,omitempty"`
+	// ContextMax is the longest context the model was trained for (GGUF
+	// context_length, HF max_position_embeddings). The context a node runs it
+	// with is a setting and rides in ServiceInfo.Inspect, not here.
+	ContextMax int `json:"context_max,omitempty"`
+	// Hidden is the width of a layer (GGUF embedding_length, HF hidden_size).
+	Hidden int `json:"hidden,omitempty"`
+	// Heads and KVHeads are the attention heads and the heads that keep keys and
+	// values (GGUF attention.head_count / head_count_kv, HF num_attention_heads /
+	// num_key_value_heads). KVHeads sets how big the KV cache is.
+	Heads   int `json:"heads,omitempty"`
+	KVHeads int `json:"kv_heads,omitempty"`
+	// Experts is how many experts a mixture-of-experts model has and ExpertsUsed
+	// how many it runs per token; both 0 for a dense model.
+	Experts     int `json:"experts,omitempty"`
+	ExpertsUsed int `json:"experts_used,omitempty"`
+	// Chat is whether the model ships a chat template (GGUF
+	// tokenizer.chat_template, HF tokenizer_config.json or chat_template.jinja):
+	// a model made to be talked to rather than only to continue text.
+	Chat bool `json:"chat,omitempty"`
 }

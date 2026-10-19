@@ -142,6 +142,19 @@ func New(base *tunnel.Base) *Provider {
 	}
 }
 
+// requestRegister asks the register loop to send a register frame now rather
+// than at the next scheduled one. Non-blocking: a full channel means one is
+// already pending. Safe to call from any goroutine.
+func (p *Provider) requestRegister() {
+	if p == nil || p.resyncCh == nil {
+		return
+	}
+	select {
+	case p.resyncCh <- struct{}{}:
+	default:
+	}
+}
+
 // NotifyJobChange wakes the heartbeat loop so the next packet flushes
 // within milliseconds of a job state transition (queued/started/done/
 // failed). Non-blocking: a full channel means a wake is already pending.
