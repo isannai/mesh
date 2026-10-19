@@ -10,13 +10,13 @@ package probe
 //	           passed in SamplePassNeeded of the SampleRounds rounds (2 of 3 unless
 //	           the config says otherwise).
 //	ref, cache the reference check in each sampling window (refcheck.go). A ticket
-//	           needs it passed in as many rounds; a reference node, its answers
+//	           needs it passed in as many rounds; an oracle node, its answers
 //	           agreeing with the other references in them.
 //	unlisted   the budget's check info does not list the node's GPU: no ticket.
 //
 // The ticket then names the group's budget (ticketFor). The majority sentence
 // check between nodes is gone (2026-10-14): copies of one fake could out-vote
-// the honest nodes, and the reference nodes are the measure now (probe.md
+// the honest nodes, and the oracle nodes are the measure now (probe.md
 // 「쓰지 않는 방식」).
 //
 // 🔴 ENOUGH PASSES, OR NO TICKET. A round the node was asked in and did not pass is

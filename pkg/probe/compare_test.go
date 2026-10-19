@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -154,6 +155,19 @@ type compareNode struct {
 	byPrompt func(node, prompt string) string // if set, used instead of answer
 	last     map[string]string                // the last prompt each node was sent
 	refuse   map[string]bool                  // nodes that reject the submit
+	noCode   bool                             // a node that does not write the code in front of its answer
+}
+
+// promptCode is the code the last question in a prompt asks to be copied
+// ("Question number 483917, ... ->"), or "" for a prompt that carries none.
+var promptCodeRe = regexp.MustCompile(`Question number (\d{6}), `)
+
+func promptCode(prompt string) string {
+	all := promptCodeRe.FindAllStringSubmatch(prompt, -1)
+	if len(all) == 0 {
+		return ""
+	}
+	return all[len(all)-1][1]
 }
 
 func (c *compareNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -199,13 +213,17 @@ func (c *compareNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSuffix(path, "/result")
 		id = id[strings.LastIndex(id, "/job-")+len("/job-"):]
 		text := ""
+		c.mu.Lock()
+		prompt := c.last[id]
+		c.mu.Unlock()
 		if c.byPrompt != nil {
-			c.mu.Lock()
-			prompt := c.last[id]
-			c.mu.Unlock()
 			text = c.byPrompt(id, prompt)
 		} else {
 			text = c.answer(id)
+		}
+		// A node that follows the instruction writes the question's code first.
+		if code := promptCode(prompt); code != "" && !c.noCode {
+			text = code + ": " + text
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{{"text": text}},

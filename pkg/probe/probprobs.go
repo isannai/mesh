@@ -2,7 +2,7 @@ package probe
 
 // probprobs.go: asking a node for an answer WITH its per-token candidates.
 //
-// The reference check (refcheck.go) compares a node's answer with the reference
+// The reference check (refcheck.go) compares a node's answer with the oracle
 // nodes' answer token by token: the text of each token and the probabilities of
 // the candidates the engine considered at that position (workspace
 // docs/todo/probe.md 「응답 읽기」). The quiz path (fire.go) reads only the text.

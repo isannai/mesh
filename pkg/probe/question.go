@@ -88,7 +88,7 @@ type mixEntry struct {
 //
 // The weights come from measurements of Qwen2.5-1.5B (20 questions of each kind) and
 // qwen3-14b (10 of each), written up with the numbers in workspace
-// docs/todo/probe-기준노드-개발.md (PB-15). There is no 7B in them: the middle tier
+// docs/todo/probe-오라클노드-개발.md (PB-15). There is no 7B in them: the middle tier
 // is an interpolation, and the weights are to be read against the pass rates
 // --report shows once it is running.
 //
@@ -233,6 +233,11 @@ type Question struct {
 	// Tier is the model-size tier the question is for (modelTier), or 0 for one any
 	// node can be asked. Only the base conversions differ by tier.
 	Tier int
+	// Opt is the six digit code the node has to write in front of its answer
+	// (opt.go). It belongs to one shot, not to the question: it is set when the
+	// question is fired and never stored, so the same question gets a new code each
+	// time it is asked. Empty asks for the answer alone, as before.
+	Opt string
 }
 
 // QA is one few-shot example.
@@ -288,6 +293,9 @@ func decodeFewshot(s string) []QA {
 // engines that declare one and skip the rest — different nodes judged under
 // different instructions, which is the one thing a comparison cannot have.
 func (q Question) BuildPrompt() string {
+	if q.Opt != "" {
+		return q.buildOptPrompt()
+	}
 	var b strings.Builder
 	b.WriteString("Give only the answer. No explanation. Answer in English. ")
 	for _, ex := range q.Fewshot {
@@ -300,6 +308,42 @@ func (q Question) BuildPrompt() string {
 	b.WriteString("Q: ")
 	b.WriteString(q.Q)
 	b.WriteString(" A:")
+	return b.String()
+}
+
+// buildOptPrompt is the prompt of a question that carries a code (opt.go):
+//
+//	Answer in exactly this form: <6 digit number>: <short answer>. Copy the 6 digit
+//	number of the question. Answer in English. Question number <c1>, <ex1> -> <c1>:
+//	<a1>. Question number <c2>, <ex2> -> <c2>: <a2>. Question number <code>, <target> ->
+//
+// Measured on a 1.5B model (Qwen2.5-1.5B Q4) over 25 questions of the six kinds,
+// two runs each: the code and the answer both right in 23 to 25 of 25, against 24
+// of 25 for the plain prompt. Two things in it were each tried against the
+// alternatives and are not decoration:
+//
+//   - The examples are of the SAME KIND as the question (the fewshot already is).
+//     With one fixed pair for every kind (a sum and an SI unit) the model copied an
+//     example's whole answer ("481903: 19") for a question of another kind, in
+//     about a third of the shots. Whether the two codes are fixed or new each shot
+//     made no difference to that; new each shot is used so no constant in the
+//     prompt marks it as a probe.
+//   - The code sits next to the question ("Question number <code>, ...") and the
+//     prompt ends on the arrow. Putting the code in brackets after "Q" and ending
+//     on "A:", or leading with "Give only the answer. No explanation.", made the
+//     model drop the code or copy an example's.
+//
+// The example codes come from exampleOpt: different every shot, so no constant in
+// the prompt marks it as a probe.
+func (q Question) buildOptPrompt() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Answer in exactly this form: <%d digit number>: <short answer>. "+
+		"Copy the %d digit number of the question. Answer in English. ", optDigits, optDigits)
+	for i, ex := range q.Fewshot {
+		c := exampleOpt(q.Opt, i)
+		fmt.Fprintf(&b, "Question number %s, %s -> %s: %s. ", c, ex.Q, c, ex.A)
+	}
+	fmt.Fprintf(&b, "Question number %s, %s ->", q.Opt, q.Q)
 	return b.String()
 }
 

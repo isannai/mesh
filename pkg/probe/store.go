@@ -186,6 +186,9 @@ var addedColumns = []string{
 	// The model-size tier a queued question is for (question.go modelTier), 0 for one
 	// any node can be asked.
 	`ALTER TABLE question ADD COLUMN tier INTEGER NOT NULL DEFAULT 0`,
+	// The six digit code the node was told to write in front of its answer
+	// (opt.go). Empty for a shot fired before the code existed, and for a picture.
+	`ALTER TABLE shot ADD COLUMN opt TEXT`,
 }
 
 // addedIndexes are indexes on those columns. They cannot sit in the schema above:
@@ -411,6 +414,11 @@ type Shot struct {
 	// collection happened inline; it has to outlive the round now, and it has
 	// to survive a prober restart or the shot can never be judged at all.
 	OrderJSON string
+
+	// Opt is the code this shot told the node to write in front of its answer.
+	// Kept next to answer_raw so a failed shot can be read afterwards: the code
+	// that was asked for, and what came back.
+	Opt string
 }
 
 // RecordShot writes the submit half of a shot and returns its row id.
@@ -423,11 +431,11 @@ func (s *Store) RecordShot(sh Shot) (int64, error) {
 		// timeout diagnosable at all.
 		`INSERT INTO shot(fired_at,node_id,node_addr,slash24,engine,service,model,model_hash,
 		                  job_id,question_id,submit_status,outcome,assign_epoch,assign_root,answer_raw,
-		                  deferred,order_json,round)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		                  deferred,order_json,round,opt)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sh.FiredAt.UnixMilli(), sh.NodeID, sh.NodeAddr, sh.Slash24, sh.Engine, sh.Service,
 		sh.Model, sh.ModelHash, sh.JobID, sh.QuestionID, sh.SubmitStatus, sh.Outcome, sh.AssignEpoch, sh.AssignRoot,
-		sh.AnswerRaw, sh.Deferred, sh.OrderJSON, sh.Round)
+		sh.AnswerRaw, sh.Deferred, sh.OrderJSON, sh.Round, sh.Opt)
 	if err != nil {
 		return 0, err
 	}

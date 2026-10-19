@@ -4,11 +4,11 @@ package probe
 //
 //	refcheck  one row per node, slot and sampling round: how the node did. A
 //	          checked node (role tested) has the result of its question; a
-//	          reference node (role ref) has whether its answers agreed with the
+//	          oracle node (role ref) has whether its answers agreed with the
 //	          other references in that round.
 //	refcache  every question a reference answered, with the reference value built
 //	          from the answers. When a group's references are all offline the
-//	          prober asks these again (workspace docs/todo/probe-기준노드.md 5절).
+//	          prober asks these again (workspace docs/todo/probe-오라클노드.md 5절).
 //	          Kept 15 days; one row per setting and prompt.
 
 import (
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS refcache (
   engine      TEXT    NOT NULL,
   model_hash  TEXT    NOT NULL,
   prompt      TEXT    NOT NULL,
-  answers     TEXT    NOT NULL,             -- each reference node's answer
+  answers     TEXT    NOT NULL,             -- each oracle node's answer
   reference   TEXT    NOT NULL,             -- the reference value built from them
   created_at  INTEGER NOT NULL,
   used_at     INTEGER NOT NULL DEFAULT 0,
@@ -103,7 +103,7 @@ func (s *Store) FinishRefCheck(r RefRow) error {
 	return err
 }
 
-// RecordRefEval adds one question's verdict on a reference node to its row for
+// RecordRefEval adds one question's verdict on an oracle node to its row for
 // the round. A failure sticks: one answer that disagreed fails the round.
 func (s *Store) RecordRefEval(r RefRow) error {
 	_, err := s.db.Exec(`

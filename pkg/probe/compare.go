@@ -5,7 +5,7 @@ package probe
 // It asked every node of a group running the same model one sentence and let the
 // largest group of matching answers win. That is gone (2026-10-14): copies of one
 // fake could out-vote the honest nodes, and probe.md 「쓰지 않는 방식」 rules out a
-// reference built from the nodes being checked. The budget's reference nodes are
+// reference built from the nodes being checked. The budget's oracle nodes are
 // the measure now (refcheck.go).
 //
 // The compare table stays: a settled ticket is a round-0 row in it (settle.go),

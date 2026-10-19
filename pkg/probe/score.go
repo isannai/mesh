@@ -47,6 +47,20 @@ const (
 // nothing, which is treated as "not truncated" — an engine that omits usage
 // must not have every wrong answer excused.
 func Score(q Question, answer string, completionTokens int) string {
+	// A question that carried a code is answered "<code>: <answer>" (opt.go). The
+	// code has to be the one that went out; then what follows it is scored as an
+	// answer, exactly as an answer without a code is.
+	if q.Opt != "" {
+		code, rest, ok := splitOpt(answer)
+		if !ok || code != q.Opt {
+			// Cut off before the code could be read: our cap, not the node's mistake.
+			if !ok && completionTokens > 0 && completionTokens >= probeMaxTokens {
+				return VerdictTruncated
+			}
+			return VerdictFail
+		}
+		answer = rest
+	}
 	matched := false
 	if numericKinds[q.Category] {
 		matched = mathMatches(q.Draft, answer)
@@ -71,9 +85,9 @@ func Score(q Question, answer string, completionTokens int) string {
 // 🔴 This gate is what makes containment usable at all. Without a cap, a node
 // that answers with a list of the world's capitals contains the draft for every
 // geography question and passes them all with no knowledge whatsoever. And the
-// token cap is no help: probeMaxTokens is 16, room for a dozen words, and
-// buildRun only sends it to engines that declare max_tokens (fire.go), so on
-// the rest there is no ceiling on the answer at all.
+// token cap is no help: probeMaxTokens is 32, of which the code takes about
+// eight, and buildRun only sends it to engines that declare max_tokens
+// (fire.go), so on the rest there is no ceiling on the answer at all.
 //
 // Two, and it stays tight because the salad bites hardest where the answer
 // space is SMALL. Capitals have hundreds of answers, so even a six-word list

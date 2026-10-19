@@ -1536,6 +1536,10 @@ func (p *Prober) assignQuestions(groups [][]Target, now time.Time) map[string]Qu
 func (p *Prober) fireOne(t Target, q Question, round int, stats *roundStats) {
 	now := time.Now()
 
+	// Every shot has a code of its own (opt.go): the node writes it in front of
+	// its answer and the shot passes only if it comes back unchanged.
+	q.Opt = newOpt()
+
 	sh := Shot{
 		FiredAt:     now,
 		NodeID:      t.Node.ID,
@@ -1549,6 +1553,7 @@ func (p *Prober) fireOne(t Target, q Question, round int, stats *roundStats) {
 		AssignEpoch: p.assign.Epoch,
 		AssignRoot:  p.assign.Root,
 		Round:       round,
+		Opt:         q.Opt,
 	}
 
 	res, serr := p.firer.Submit(t, q)
@@ -1603,8 +1608,8 @@ func (p *Prober) fireOne(t Target, q Question, round int, stats *roundStats) {
 	}
 	switch verdict {
 	case VerdictFail:
-		log.Printf("[probe] %s answered %q, expected %q (%s)",
-			short(t.Node.ID), trim(fetched.Answer), q.Draft, q.Category)
+		log.Printf("[probe] %s answered %q, expected %q after code %s (%s)",
+			short(t.Node.ID), trim(fetched.Answer), q.Draft, q.Opt, q.Category)
 	case VerdictTruncated:
 		// Our cap, not the node's mistake. Logged loudly because a run of these
 		// means probeMaxTokens is set too low for the answers being asked for.

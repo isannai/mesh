@@ -39,10 +39,15 @@ const (
 	// normally never reaches this at all. What the number decides is only what
 	// happens to an answer that keeps going.
 	//
-	// NOT the 4-8 that "one word answers" suggests: that truncates multi-token
+	// 32 now that every answer starts with a code (opt.go): "483917: " is about
+	// eight tokens before the answer begins, a digit being one token on most
+	// tokenisers, so the 16 this used to be left a long proper noun almost no room.
+	//
+	// And not the 4-8 that "one word answers" suggests: that truncates multi-token
 	// proper nouns and fails honest nodes. "Ouagadougou" and "Antananarivo" run
 	// to six or seven tokens on a Llama tokeniser, and a leading space token
-	// eats one more. 16 clears the longest capital name with room to spare.
+	// eats one more. Measured with the code on a 1.5B model: the answers took 10
+	// to 13 tokens in all, so 32 clears the longest of them more than twice over.
 	//
 	// It is not the defence against a node answering with a LIST either — that
 	// is the word gate in score.go (maxExtraWords), which caps a one-word draft
@@ -51,7 +56,7 @@ const (
 	// A shot cut off here is recorded as VerdictTruncated rather than a failure,
 	// so setting this too low shows up in the log instead of quietly failing
 	// honest nodes.
-	probeMaxTokens = 16
+	probeMaxTokens = 32
 	// Deterministic — the same question must not become easier or harder
 	// depending on sampling luck.
 	probeTemperature = 0

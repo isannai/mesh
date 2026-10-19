@@ -1,15 +1,15 @@
 package probe
 
-// refcheck.go: the reference check (workspace docs/todo/probe-기준노드.md 4절 · 5절,
-// docs/todo/probe.md 「기준 노드」 「판정」).
+// refcheck.go: the reference check (workspace docs/todo/probe-오라클노드.md 4절 · 5절,
+// docs/todo/probe.md 「오라클 노드」 「판정」).
 //
 // The RV now groups a slot by the budget each node's owner registered in and by
-// GPU, and puts the budget's registered reference nodes into every group of
+// GPU, and puts the budget's registered oracle nodes into every group of
 // their GPU (servers pkg/rendezvous faucet_plan.go). A group says how it is
 // checked (AssignGroup.Mode):
 //
 //	ref       for every checked node, a question of its own goes FIRST to all the
-//	          group's reference nodes. Their answers make the reference value, and
+//	          group's oracle nodes. Their answers make the reference value, and
 //	          only then is the node asked the same question and held against it.
 //	cache     the references are all offline: the node gets a question stored
 //	          while they were online, held against the stored reference value.
@@ -42,11 +42,11 @@ package probe
 //	       default 0.001) of the reference value, at most RefMaxMisses misses
 //	       (default 0). Both are to be set by measurement.
 //
-// REFERENCE NODES are paid too. With two or more, each is held against the median
+// ORACLE NODES are paid too. With two or more, each is held against the median
 // of the others for every question of the round; one disagreeing answer fails its
 // round. With only one there is nothing to hold it against, and it passes a round
 // in which it answered with candidates (a choice made here; the design leaves it
-// open, workspace docs/todo/probe-기준노드.md 8절). Each group also asks its
+// open, workspace docs/todo/probe-오라클노드.md 8절). Each group also asks its
 // references one question of their own per round, so a reference is checked even
 // when no other node of its group is.
 //
@@ -205,10 +205,10 @@ func median(v []float64) float64 {
 	return (v[n/2-1] + v[n/2]) / 2
 }
 
-var errRefsDisagree = errors.New("the reference nodes do not agree")
+var errRefsDisagree = errors.New("the oracle nodes do not agree")
 
-// buildReference makes the reference value from the reference nodes' answers and
-// says, per reference node, whether its answer agreed with the others. A node
+// buildReference makes the reference value from the oracle nodes' answers and
+// says, per oracle node, whether its answer agreed with the others. A node
 // missing from evals was not judged (a two-way split names nobody).
 func buildReference(answers map[string]ProbAnswer, tol float64, maxMiss int) (Reference, map[string]bool, error) {
 	ids := make([]string, 0, len(answers))
@@ -379,7 +379,7 @@ func onModel(t Target, g AssignGroup) Target {
 	return t
 }
 
-// refTargetsOf is the group's reference nodes this prober can reach now. A prober
+// refTargetsOf is the group's oracle nodes this prober can reach now. A prober
 // never checks itself, so it does not ask itself as a reference either.
 func (p *Prober) refTargetsOf(g AssignGroup, byAddr map[string]Target) []Target {
 	var out []Target
@@ -468,7 +468,7 @@ func (p *Prober) askReferences(epoch int64, gi, round int, g AssignGroup, refs [
 			texts = append(texts, fmt.Sprintf("%s=%q", short(id), a.Text))
 		}
 		sort.Strings(texts)
-		log.Printf("[probe] refcheck: budget %d GPU %q: the reference nodes disagree (%s) - check their settings",
+		log.Printf("[probe] refcheck: budget %d GPU %q: the oracle nodes disagree (%s) - check their settings",
 			g.BudgetID, g.GPU, strings.Join(texts, ", "))
 		return Reference{}, reasonDisagree
 	}
@@ -722,7 +722,7 @@ func (p *Prober) forgetOldRefUse(epoch int64) {
 
 // --- settling --------------------------------------------------------------
 
-// modeOf is how a node is checked this slot: ref for a reference node, otherwise
+// modeOf is how a node is checked this slot: ref for an oracle node, otherwise
 // its group's mode (quiz for a node in no group, or from an older RV).
 func (p *Prober) modeOf(addr string) (AssignGroup, string) {
 	addr = strings.ToLower(strings.TrimSpace(addr))

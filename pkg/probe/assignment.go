@@ -46,7 +46,7 @@ type AssignGroup struct {
 	Path []string `json:"path"`
 
 	// What the group is checked against, from an RV that groups by budget
-	// registration (2026-10-14, workspace docs/todo/probe-기준노드.md 3절). All
+	// registration (2026-10-14, workspace docs/todo/probe-오라클노드.md 3절). All
 	// empty from an older RV, which means the old checks (Planned).
 	//
 	//	BudgetID  the budget that pays the group: the one its nodes registered in,
@@ -54,7 +54,7 @@ type AssignGroup struct {
 	//	Model     that budget's model hash; empty for the system budget
 	//	GPU       the GPU name the group was cut by
 	//	Mode      ref | cache | quiz | unlisted (refcheck.go)
-	//	Refs      the reference nodes in Members
+	//	Refs      the oracle nodes in Members
 	//	MetaHash, Engine, Profile  the settings stored questions are keyed by
 	BudgetID uint64   `json:"budget_id,omitempty"`
 	Model    string   `json:"model,omitempty"`
@@ -68,13 +68,13 @@ type AssignGroup struct {
 
 // The group check modes (the RV's faucet_plan.go).
 const (
-	ModeRef      = "ref"      // reference nodes are in the group: ask them first
+	ModeRef      = "ref"      // oracle nodes are in the group: ask them first
 	ModeCache    = "cache"    // its references are all offline: reuse stored questions
 	ModeQuiz     = "quiz"     // no reference: the quiz
 	ModeUnlisted = "unlisted" // the GPU is not in the budget's check info: no ticket
 )
 
-// IsRef reports whether addr is one of this group's reference nodes.
+// IsRef reports whether addr is one of this group's oracle nodes.
 func (g AssignGroup) IsRef(addr string) bool {
 	for _, r := range g.Refs {
 		if strings.EqualFold(strings.TrimSpace(r), addr) {
