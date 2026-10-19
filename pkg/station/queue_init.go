@@ -13,6 +13,7 @@ package station
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/isannai/mesh/pkg/engine/manifest"
@@ -35,6 +36,7 @@ import (
 // workers in tandem. The returned Storage may be nil when memory-only.
 func initQueueSubsystem(ctx context.Context, cfg tunnel.Config, packagesDir string, onJobChange func(serviceName, event, jobID string, pending, running int)) (*queue.Manager, *queue.Storage) {
 	storage := initStorage(cfg)
+	counts := initCounterStore()
 
 	// Factory maps each ServiceEntry to its Config + ProcessFunc, blending
 	// service config (cfg.Services[i].Queue) with engine manifest defaults
@@ -43,6 +45,11 @@ func initQueueSubsystem(ctx context.Context, cfg tunnel.Config, packagesDir stri
 		m := loadServiceManifest(svc, packagesDir)
 		qcfg := queue.BuildConfig(svc, m)
 		qcfg.OnJobChange = onJobChange
+		qcfg.Counts = counts
+		qcfg.Engine = svc.Engine
+		if qcfg.Engine == "" && m != nil {
+			qcfg.Engine = m.Name
+		}
 
 		// Auto-derive the worker count from the engine's own slot variable
 		// (.env PARALLEL / MAX_NUM_SEQS, named by manifest.queue.concurrency_env)
@@ -133,6 +140,19 @@ func initQueueSubsystem(ctx context.Context, cfg tunnel.Config, packagesDir stri
 
 	mgr := queue.NewManager(ctx, factory)
 	return mgr, storage
+}
+
+// initCounterStore opens the file that keeps each service's answered-job count
+// and its last job times across a restart: <install root>/db/job-counts.json.
+// When the file cannot be read or written the queues still count, in memory
+// only, and the reason is logged.
+func initCounterStore() *queue.CounterStore {
+	path := filepath.Join(manifest.InstallRoot(), "db", "job-counts.json")
+	store, err := queue.OpenCounterStore(path)
+	if err != nil {
+		log.Printf("[station] job counts: %v", err)
+	}
+	return store
 }
 
 // initStorage configures the Provider's result directory + cleanup. Returns

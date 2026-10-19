@@ -57,6 +57,14 @@ type Config struct {
 	// pending: 큐 대기 중 작업 수 (event 발생 직후)
 	// running: 실행 중 작업 수 (completed/failed는 본인 제외 후)
 	OnJobChange func(serviceName, event, jobID string, pending, running int)
+
+	// Engine names the engine behind this service. It is saved with the job
+	// counts so counts earned by one engine are not carried over to another
+	// that later takes the same service name.
+	Engine string
+
+	// Counts keeps the job counters across a restart. Nil = memory only.
+	Counts *CounterStore
 }
 
 // ErrQueueFull is returned by Submit when the queue's combined pending+running
@@ -146,7 +154,7 @@ type Queue struct {
 
 	totalDone   int64
 	totalFailed int64
-	durations   []time.Duration // recent durations for avg calculation
+	durations   []time.Duration // the last avgWindow job times, for the average
 
 	cleanupHook func(*Job) // optional callback when a job is evicted
 	events      *glog.EventWriter
@@ -166,7 +174,7 @@ func (q *Queue) SetCleanupHook(fn func(*Job)) {
 
 // New creates a Queue. Call Worker in a goroutine to start processing.
 func New(cfg Config) *Queue {
-	return &Queue{
+	q := &Queue{
 		cfg:         cfg.withDefaults(),
 		jobs:        make(map[string]*Job),
 		running:     make(map[string]*Job),
@@ -175,6 +183,8 @@ func New(cfg Config) *Queue {
 		onJobChange: cfg.OnJobChange,
 		ids:         newIDSet(), // a Manager swaps in its shared set (GetOrCreate)
 	}
+	q.restore()
+	return q
 }
 
 // ServiceName returns the configured owning service name. Empty string when
@@ -543,9 +553,10 @@ func (q *Queue) runJob(ctx context.Context, job *Job, process ProcessFunc) {
 	job.EndedAt = time.Now()
 	dur := job.EndedAt.Sub(job.StartedAt)
 	q.durations = append(q.durations, dur)
-	if len(q.durations) > 20 {
+	for len(q.durations) > avgWindow {
 		q.durations = q.durations[1:]
 	}
+	counts := q.countersLocked()
 	close(job.doneCh)
 
 	events := q.events
@@ -573,6 +584,9 @@ func (q *Queue) runJob(ctx context.Context, job *Job, process ProcessFunc) {
 		}
 	}
 	q.mu.Unlock()
+
+	// Saved outside the lock: it is a file write, and Submit must not wait for it.
+	q.cfg.Counts.Put(serviceName, counts)
 
 	if events != nil {
 		events.Emit("job."+event, emitPayload)
