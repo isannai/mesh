@@ -14,8 +14,8 @@ package probe
 //
 // WHAT IT DOES NOT SHOW. A node that reads the code out of the prompt and writes
 // it back in front of an answer it got elsewhere passes this check; the answer
-// itself is what the quiz is scored on (score.go), and the model-identity check
-// is what tells models apart (refcheck.go).
+// itself is what the quiz is scored on (score.go), and the live look at the node's
+// own report before a ticket (settle.go) is what holds it to the budget's model.
 
 import (
 	"crypto/rand"

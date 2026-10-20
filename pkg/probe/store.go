@@ -201,12 +201,23 @@ var addedIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS shot_epoch ON shot(assign_epoch, round, node_id)`,
 }
 
+// droppedTables are tables an earlier prober made and this one no longer uses.
+var droppedTables = []string{
+	`DROP TABLE IF EXISTS refcheck`,
+	`DROP TABLE IF EXISTS refcache`,
+}
+
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("probe db schema: %w", err)
 	}
-	if _, err := s.db.Exec(refSchema); err != nil {
-		return fmt.Errorf("probe db reference tables: %w", err)
+	// The oracle-node check's two tables are no longer written (2026-10-20). A
+	// database made by an earlier prober still holds them; they were only a cache
+	// of questions and rows kept 15 days, so they are dropped.
+	for _, stmt := range droppedTables {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("probe db drop old tables: %w", err)
+		}
 	}
 	for _, stmt := range addedColumns {
 		_, _ = s.db.Exec(stmt)

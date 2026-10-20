@@ -45,44 +45,28 @@ type AssignGroup struct {
 	// empty path is the correct proof rather than a missing one.
 	Path []string `json:"path"`
 
-	// What the group is checked against, from an RV that groups by budget
-	// registration (2026-10-14, workspace docs/todo/probe-오라클노드.md 3절). All
-	// empty from an older RV, which means the old checks (Planned).
+	// What the group is checked against, from an RV that plans each slot by budget
+	// (workspace docs/todo/probe-오라클노드.md 3절). All empty from an older RV, which
+	// means the old checks (Planned).
 	//
 	//	BudgetID  the budget that pays the group: the one its nodes registered in,
 	//	          or the system budget. 0 when no system budget is active.
 	//	Model     that budget's model hash; empty for the system budget
-	//	GPU       the GPU name the group was cut by
-	//	Mode      ref | cache | quiz | unlisted (refcheck.go)
-	//	Refs      the oracle nodes in Members
-	//	MetaHash, Engine, Profile  the settings stored questions are keyed by
-	BudgetID uint64   `json:"budget_id,omitempty"`
-	Model    string   `json:"model,omitempty"`
-	GPU      string   `json:"gpu,omitempty"`
-	Mode     string   `json:"mode,omitempty"`
-	Refs     []string `json:"refs,omitempty"`
-	MetaHash string   `json:"meta_hash,omitempty"`
-	Engine   string   `json:"engine,omitempty"`
-	Profile  string   `json:"profile,omitempty"`
+	//	MinGrade  the lowest GPU memory grade the budget accepts (gpugrade.go); 0 or
+	//	          absent means no limit. Only a budget with a model sets it.
+	//	Mode      "quiz" from a planning RV, empty from an older one (CheckMode)
+	//	MetaHash  the budget's meta hash, kept as the RV sends it
+	BudgetID uint64 `json:"budget_id,omitempty"`
+	Model    string `json:"model,omitempty"`
+	MinGrade int    `json:"min_grade,omitempty"`
+	Mode     string `json:"mode,omitempty"`
+	MetaHash string `json:"meta_hash,omitempty"`
 }
 
-// The group check modes (the RV's faucet_plan.go).
-const (
-	ModeRef      = "ref"      // oracle nodes are in the group: ask them first
-	ModeCache    = "cache"    // its references are all offline: reuse stored questions
-	ModeQuiz     = "quiz"     // no reference: the quiz
-	ModeUnlisted = "unlisted" // the GPU is not in the budget's check info: no ticket
-)
-
-// IsRef reports whether addr is one of this group's oracle nodes.
-func (g AssignGroup) IsRef(addr string) bool {
-	for _, r := range g.Refs {
-		if strings.EqualFold(strings.TrimSpace(r), addr) {
-			return true
-		}
-	}
-	return false
-}
+// ModeQuiz is the one way a group is checked now: the quiz (quiz.go). The RV used
+// to name other modes (an oracle node's answer as the reference). It no longer
+// does, and this prober does not read them.
+const ModeQuiz = "quiz"
 
 // CheckMode is how a node of this group is checked: quiz for a group from an
 // older RV, which names no mode.

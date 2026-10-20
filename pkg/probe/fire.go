@@ -80,9 +80,6 @@ type Firer struct {
 
 	mu      sync.Mutex
 	schemas map[string]*manifest.RunSpec // "<nodeID>|<svc>" → run schema
-	// probeRuns is each node service's default run when it returns candidates, nil
-	// when it cannot (probprobs.go).
-	probeRuns map[string]*manifest.RunSpec
 }
 
 // NewFirer builds a Firer. The client carries no timeout of its own; each call

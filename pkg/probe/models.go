@@ -339,7 +339,7 @@ func (p *Prober) nodeModelLocked(svcs []rvnodes.Service) string {
 
 // ticketFor is what a ticket for t carries, whether to write one, and why not.
 //
-// From an RV that groups by budget registration (Assignment.Planned), the node's
+// From an RV that plans each slot by budget (Assignment.Planned), the node's
 // group decides, not the node's model hash: the group's budget is the one its
 // owner registered in, or the system budget. A model budget's ticket names that
 // budget and its model, and the node must be running it. A system group's ticket
@@ -350,10 +350,8 @@ func (p *Prober) ticketFor(t Target) (model, params, budgetID string, write bool
 		model, params, budgetID, write = p.nodeTicketBudget(t)
 		return model, params, budgetID, write, ""
 	}
-	g, mode := p.modeOf(nodeAddressOf(t.Node.ID))
+	g := p.groupFor(nodeAddressOf(t.Node.ID))
 	switch {
-	case mode == ModeUnlisted:
-		return "", "", "", false, "its GPU is not in the budget's check info"
 	case g.BudgetID == 0:
 		return "", "", "", false, "no system budget is active"
 	case g.Model == "":
@@ -364,6 +362,37 @@ func (p *Prober) ticketFor(t Target) (model, params, budgetID string, write bool
 		return "", "", "", false, fmt.Sprintf("it does not run the model of budget %d", g.BudgetID)
 	}
 	return want, ticketParams(t.Service.ModelClass), strconv.FormatUint(g.BudgetID, 10), true, ""
+}
+
+// groupFor is the group that holds addr in this slot's assignment (the first, when
+// several do), or the zero group for a node the RV put in none.
+func (p *Prober) groupFor(addr string) AssignGroup {
+	if i := p.assign.GroupOf(addr); i >= 0 {
+		return p.assign.Groups[i]
+	}
+	return AssignGroup{}
+}
+
+// onModel points t at the node's service that runs the group's model, when it
+// runs several. A system group has no model and keeps t as it is.
+func onModel(t Target, g AssignGroup) Target {
+	want := strings.ToLower(strings.TrimSpace(g.Model))
+	if want == "" {
+		return t
+	}
+	if m, err := faucet.ModelFromReport(t.Service.ModelHash); err == nil && m == want {
+		return t
+	}
+	for _, s := range t.Node.Services {
+		if !s.ServerReady {
+			continue
+		}
+		if m, err := faucet.ModelFromReport(s.ModelHash); err == nil && m == want {
+			t.Service = s
+			return t
+		}
+	}
+	return t
 }
 
 // budgetSummary is the directory log's note on the budgets: how many model

@@ -16,9 +16,9 @@ package probe
 // only once. A random moment inside each window means a node cannot know when it
 // will be asked.
 //
-// Both kinds of request follow this clock: the quiz (quiz.go) and the reference
-// check (refcheck.go). A ticket is settled once, a minute after the last window
-// closes (settle.go), and needs SamplePassNeeded of the rounds passed.
+// The quiz (quiz.go) follows this clock. A ticket is settled once, a minute after
+// the last window closes (settle.go), and needs SamplePassNeeded of the rounds
+// passed.
 
 import (
 	"fmt"

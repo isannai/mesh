@@ -291,12 +291,10 @@ func isCompletions(path string) bool { return path == "/v1/completions" }
 // bufferedJob reports a job the worker must NOT turn into a stream.
 //
 //   - It asks for per-token candidate probabilities (OpenAI logprobs, or llama.cpp
-//     n_probs). The faucet prober compares them with its oracle nodes
-//     (workspace docs/todo/probe-오라클노드.md 4절), and a reassembled stream keeps
-//     only the last chunk's, so every earlier token's would be lost.
+//     n_probs). Any client may ask, and a reassembled stream keeps only the last
+//     chunk's, so every earlier token's would be lost.
 //
-// Such jobs are short (the prober asks for 8 tokens), so a buffered job's total
-// deadline costs nothing.
+// Such jobs are usually short, so a buffered job's total deadline costs nothing.
 func bufferedJob(job *Job) bool {
 	var m map[string]any
 	if json.Unmarshal(job.RequestBody, &m) != nil {

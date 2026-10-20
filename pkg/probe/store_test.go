@@ -302,3 +302,48 @@ func TestShotRoundColumnIsAddedToAnOlderDatabase(t *testing.T) {
 		t.Errorf("quiz shots = %+v, want only the round 2 row", shots)
 	}
 }
+
+// The oracle-node check's two tables are gone (2026-10-20). A database an earlier
+// prober made still holds them, and opening it drops them without touching the rest.
+func TestOldReferenceTablesAreDroppedOnOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddQuestions([]Question{{Category: CatMath, Q: "a", Draft: "1"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE refcheck (epoch INTEGER, node_id TEXT, round INTEGER)`,
+		`CREATE INDEX refcheck_at ON refcheck(epoch)`,
+		`CREATE TABLE refcache (id INTEGER PRIMARY KEY, prompt TEXT)`,
+		`INSERT INTO refcache(prompt) VALUES ('Q: x')`,
+	} {
+		if _, err := old.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatalf("open with the old tables: %v", err)
+	}
+	defer s.Close()
+	for _, table := range []string{"refcheck", "refcache"} {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = ?`, table).Scan(&n); err != nil || n != 0 {
+			t.Errorf("table %s still there (%d, %v)", table, n, err)
+		}
+	}
+	if d, _ := s.QueueDepth(); d[CatMath] != 1 {
+		t.Errorf("the rest of the database was touched: %+v", d)
+	}
+}
