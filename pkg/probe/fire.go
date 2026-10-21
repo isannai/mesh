@@ -62,8 +62,20 @@ const (
 	probeTemperature = 0
 )
 
-// probeStop ends generation at the first newline or the next "Q:".
+// probeStop ends generation at the first newline or the next "Q:". It is what makes
+// an answer short on an engine that declares no token cap.
 var probeStop = []string{"\n", "Q:"}
+
+// probeStopCapped is the stop sequence when the engine declares a token cap, which
+// then keeps the answer short and the newline stop is dropped.
+//
+// 🔴 A newline stop kills a reply that opens with an empty reasoning block. A Qwen3
+// run with thinking switched off (--reasoning-budget 0) still writes
+// "<think>\n\n</think>" first, three tokens, and the first newline in it ends the
+// reply: finish_reason "stop", three tokens, content "". The node was fine and every
+// shot failed. Scoring reads the first line only (score.go), so a reply that goes on
+// past its answer costs nothing, and the cap bounds it.
+var probeStopCapped = []string{"Q:"}
 
 // SubmitResult is what a submit attempt produced.
 type SubmitResult struct {
@@ -198,18 +210,39 @@ func buildRunPrompt(rs *manifest.RunSpec, prompt string, maxTokens int) map[stri
 	run[promptKey] = prompt
 
 	// The rest are best-effort: set them when the engine declares them, skip
-	// them otherwise. A missing max_tokens costs measurement quality, not
+	// them otherwise. A missing token cap costs measurement quality, not
 	// correctness, so it must not fail the shot.
-	if has["max_tokens"] {
-		run["max_tokens"] = maxTokens
+	//
+	// 🔴 The cap goes under the name the schema declares. llama declares "max-tokens"
+	// with a hyphen, and a run key "max_tokens" is not bound to anything there: the
+	// cap was never applied, and a node could write as much as it liked (measured:
+	// max_tokens 6 gave 174 tokens, max-tokens 6 gave 6).
+	capKey := declaredName(has, "max-tokens", "max_tokens")
+	if capKey != "" {
+		run[capKey] = maxTokens
 	}
 	if has["temperature"] {
 		run["temperature"] = probeTemperature
 	}
 	if has["stop"] {
-		run["stop"] = probeStop
+		if capKey != "" {
+			run["stop"] = probeStopCapped
+		} else {
+			run["stop"] = probeStop
+		}
 	}
 	return run
+}
+
+// declaredName is the first of names the schema declares, "" when it declares none.
+// One setting is spelled differently by different engines.
+func declaredName(has map[string]bool, names ...string) string {
+	for _, n := range names {
+		if has[n] {
+			return n
+		}
+	}
+	return ""
 }
 
 // Submit sends one question to one node.

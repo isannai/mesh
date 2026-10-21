@@ -158,7 +158,7 @@ func TestBuildPromptWithOpt(t *testing.T) {
 		t.Error("the prompt is not stable for one code")
 	}
 	// No stop sequence of the probe's appears in it by accident.
-	for _, s := range probeStop {
+	for _, s := range append(append([]string{}, probeStop...), probeStopCapped...) {
 		if strings.Contains(p, s) {
 			t.Errorf("the prompt contains the stop sequence %q: %q", s, p)
 		}

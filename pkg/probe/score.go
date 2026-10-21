@@ -47,6 +47,8 @@ const (
 // nothing, which is treated as "not truncated" — an engine that omits usage
 // must not have every wrong answer excused.
 func Score(q Question, answer string, completionTokens int) string {
+	// A reasoning block in front of the reply is not part of the answer.
+	answer = stripThink(answer)
 	// A question that carried a code is answered "<code>: <answer>" (opt.go). The
 	// code has to be the one that went out; then what follows it is scored as an
 	// answer, exactly as an answer without a code is.
@@ -78,6 +80,27 @@ func Score(q Question, answer string, completionTokens int) string {
 		return VerdictTruncated
 	}
 	return VerdictFail
+}
+
+// stripThink drops a reasoning block from the front of a reply: "<think>...</think>"
+// and the blank space after it. An empty block is what a Qwen3 run with thinking
+// switched off still writes first. A server may have moved it out of the content
+// already (llama.cpp does), and then there is nothing to drop.
+//
+// A block that is never closed means the reply ended while the node was still
+// reasoning, so there is no answer in it: "" is returned, and Score calls that
+// truncated when the cap was hit and a fail when it was not.
+func stripThink(s string) string {
+	t := strings.TrimLeftFunc(s, unicode.IsSpace)
+	const open, closing = "<think>", "</think>"
+	if !strings.HasPrefix(t, open) {
+		return s
+	}
+	i := strings.Index(t, closing)
+	if i < 0 {
+		return ""
+	}
+	return strings.TrimLeftFunc(t[i+len(closing):], unicode.IsSpace)
 }
 
 // maxExtraWords is how many words a node may add beyond the draft's own count.

@@ -253,3 +253,49 @@ func TestNodeBaseAddsRolePrefix(t *testing.T) {
 		t.Errorf("existing prefix must be kept: %q", got)
 	}
 }
+
+// The cap goes under the name the schema declares. llama spells it with a hyphen,
+// and a run key that the schema does not declare is bound to nothing: the cap was
+// never applied there. With a cap in force the newline stop is dropped, so a reply
+// that opens with an empty reasoning block is not cut inside it.
+func TestBuildRunUsesTheDeclaredCapName(t *testing.T) {
+	spec := func(cap string) *manifest.RunSpec {
+		return &manifest.RunSpec{Params: []manifest.RunParam{
+			{Name: "prompt", Type: "string", Required: true},
+			{Name: cap, Type: "int"},
+			{Name: "temperature", Type: "float"},
+			{Name: "stop", Type: "string"},
+		}}
+	}
+	for _, name := range []string{"max-tokens", "max_tokens"} {
+		run := buildRun(spec(name), testQuestion())
+		if run[name] != probeMaxTokens {
+			t.Errorf("%s: cap = %v, want %d", name, run[name], probeMaxTokens)
+		}
+		other := map[string]string{"max-tokens": "max_tokens", "max_tokens": "max-tokens"}[name]
+		if _, ok := run[other]; ok {
+			t.Errorf("%s: the undeclared spelling %q was sent too", name, other)
+		}
+		stop, _ := run["stop"].([]string)
+		if len(stop) != 1 || stop[0] != "Q:" {
+			t.Errorf("%s: stop = %v, want only the next question marker", name, run["stop"])
+		}
+	}
+}
+
+// An engine that declares no cap keeps the newline stop, which is then what keeps
+// the answer short.
+func TestBuildRunWithoutACapKeepsTheNewlineStop(t *testing.T) {
+	rs := &manifest.RunSpec{Params: []manifest.RunParam{
+		{Name: "prompt", Type: "string", Required: true},
+		{Name: "stop", Type: "string"},
+	}}
+	run := buildRun(rs, testQuestion())
+	stop, _ := run["stop"].([]string)
+	if len(stop) != 2 || stop[0] != "\n" || stop[1] != "Q:" {
+		t.Errorf("stop = %v, want the newline and the next question marker", run["stop"])
+	}
+	if len(run) != 2 {
+		t.Errorf("run = %v, want only the prompt and the stop", run)
+	}
+}

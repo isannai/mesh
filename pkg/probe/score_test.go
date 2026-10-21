@@ -173,3 +173,40 @@ func TestScoreIgnoresEchoedLabel(t *testing.T) {
 		t.Errorf("echoed label on a wrong answer = %s, want fail", v)
 	}
 }
+
+// A reply that opens with a reasoning block is scored on what follows it. An empty
+// block is what a Qwen3 run with thinking off still writes first.
+func TestStripThink(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"\n", "\n"},
+		{"Paris", "Paris"},
+		{"<think>\n\n</think>\n\n538308: United Kingdom", "538308: United Kingdom"},
+		{"  <think>reasoning here</think> Paris", "Paris"},
+		{"<think>\n\n</think>", ""},
+		{"<think>still going", ""},                           // never closed: no answer in it
+		{"Paris <think>x</think>", "Paris <think>x</think>"}, // only at the front
+	}
+	for _, c := range cases {
+		if got := stripThink(c.in); got != c.want {
+			t.Errorf("stripThink(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestScoreSkipsALeadingThinkBlock(t *testing.T) {
+	q := Question{Category: CatGeography, Draft: "United Kingdom", Opt: "538308"}
+	if v := Score(q, "<think>\n\n</think>\n\n538308: United Kingdom", 13); v != VerdictPass {
+		t.Errorf("an empty think block before a right answer = %s, want pass", v)
+	}
+	if v := Score(q, "<think>\n\n</think>\n\n538308: France", 12); v != VerdictFail {
+		t.Errorf("an empty think block before a wrong answer = %s, want fail", v)
+	}
+	// Cut off inside the block: the cap, not the node's mistake.
+	if v := Score(q, "<think>\nlet me think about this", probeMaxTokens); v != VerdictTruncated {
+		t.Errorf("cut off while thinking at the cap = %s, want truncated", v)
+	}
+	// Nothing after the block and no cap hit: a plain fail.
+	if v := Score(q, "<think>\n\n</think>", 3); v != VerdictFail {
+		t.Errorf("an empty reply = %s, want fail", v)
+	}
+}
