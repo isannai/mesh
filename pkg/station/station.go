@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -567,7 +568,18 @@ func (p *Provider) HandleServiceProxy(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
 	}
-	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	// ?timeout=<sec> bounds the whole engine call (the same convention and the same
+	// 1-600 s clamp as the job path, see clampTimeoutSecs). The query is also passed on
+	// to the engine as before. Without it there is no limit: an image or a long answer
+	// may take minutes, so no default is imposed here.
+	ctx := r.Context()
+	limit := clampTimeoutSecs(r.URL.Query().Get("timeout"))
+	if limit > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(limit)*time.Second)
+		defer cancel()
+	}
+	proxyReq, err := http.NewRequestWithContext(ctx, r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, "svc proxy request: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -582,6 +594,14 @@ func (p *Provider) HandleServiceProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := http.DefaultClient.Do(proxyReq)
 	if err != nil {
+		// The caller's own limit ran out before the engine answered: a 504 that says
+		// so, not the 502 of an engine that cannot be reached.
+		if limit > 0 && r.Context().Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusGatewayTimeout)
+			fmt.Fprintf(w, `{"error":"svc proxy: no answer within %d seconds (the ?timeout= limit)"}`, limit)
+			return
+		}
 		http.Error(w, `{"error":"svc proxy: `+err.Error()+`"}`, http.StatusBadGateway)
 		return
 	}
