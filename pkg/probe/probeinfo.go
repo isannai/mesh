@@ -11,14 +11,18 @@ package probe
 //
 //	{ "services": [ {"name":"llm-api","engine":"llama","model_hash":"sha256:..."} ],
 //	  "gpus":     [ {"name":"NVIDIA GeForce RTX 4090","memory_gb":24} ],
-//	  "ram_gb":   64 }
+//	  "ram_gb":   64,
+//	  "tpm_verified": true, "named": true }
 //
 // model_hash is empty when the engine is stopped or its profile changed since it
-// started. Memory is in GB to 0.1.
+// started. Memory is in GB to 0.1. tpm_verified and named are left out when the
+// node cannot tell.
 //
-// liveCheck applies the same three rules as the RV (model, one LLM, GPU grade).
-// A node with no door (an older isannd) or one that does not answer is NOT turned
-// away for it: the check the RV made when it built the slot stands.
+// liveCheck applies the same rules as the RV (model, one LLM, GPU grade, and the
+// budget's TPM and Name-service conditions when it has them). A node with no door
+// (an older isannd) or one that does not answer is NOT turned away for it: the check
+// the RV made when it built the slot stands. So does a node that leaves tpm_verified
+// or named out, for that one condition.
 
 import (
 	"encoding/json"
@@ -40,11 +44,16 @@ var probeInfoTimeout = 3 * time.Second
 // /probe/info door yet.
 var errNoProbeDoor = errors.New("the node has no /probe/info door (an older isannd)")
 
-// NodeProbeInfo is the /probe/info body.
+// NodeProbeInfo is the /probe/info body. TPMVerified (the node's TPM is verified)
+// and Named (the node has a live Name-service subdomain) are pointers: nil is a node
+// that cannot tell or an isannd that does not send them, which is not the same as
+// false.
 type NodeProbeInfo struct {
-	Services []ProbeInfoService `json:"services"`
-	GPUs     []ProbeInfoGPU     `json:"gpus"`
-	RAMGB    float64            `json:"ram_gb"`
+	Services    []ProbeInfoService `json:"services"`
+	GPUs        []ProbeInfoGPU     `json:"gpus"`
+	RAMGB       float64            `json:"ram_gb"`
+	TPMVerified *bool              `json:"tpm_verified,omitempty"`
+	Named       *bool              `json:"named,omitempty"`
 }
 
 // ProbeInfoService is one service of the node. ModelHash is empty when its engine
@@ -102,7 +111,7 @@ func (p *Prober) liveRefusal(t Target, g AssignGroup) string {
 	info, err := p.firer.ProbeInfo(t.Node.ID)
 	switch {
 	case err == nil:
-		return liveCheck(info, g.Model, g.MinGrade)
+		return liveCheck(info, g.liveWant())
 	case errors.Is(err, errNoProbeDoor):
 		log.Printf("[probe] %s: no live check, its isannd has no /probe/info; the check made when the slot was built stands",
 			short(t.Node.ID))
@@ -118,7 +127,24 @@ const (
 	liveModel    = "model"
 	liveExtraLLM = "extra LLM"
 	liveGPUGrade = "GPU grade"
+	liveTPM      = "TPM"
+	liveNamed    = "name"
 )
+
+// liveWant is what a group asks of a node: the budget's model hash, its lowest GPU
+// grade (0 for no limit), and whether it pays only TPM-verified nodes or only nodes
+// with a live Name-service subdomain.
+type liveWant struct {
+	Model        string
+	MinGrade     int
+	RequireTPM   bool
+	RequireNamed bool
+}
+
+// liveWant is the group's side of liveCheck.
+func (g AssignGroup) liveWant() liveWant {
+	return liveWant{Model: g.Model, MinGrade: g.MinGrade, RequireTPM: g.RequireTPM, RequireNamed: g.RequireNamed}
+}
 
 // isLLMService tells a text-generation service from the others (image and so on)
 // by the engine or the service name, as the RV does.
@@ -134,19 +160,23 @@ func isLLMService(s ProbeInfoService) bool {
 	return false
 }
 
-// liveCheck holds what a node runs now against the budget it is paid from: model is
-// the budget's model hash, minGrade its lowest GPU grade (0 for no limit). It returns
-// "" when the node fits, otherwise why not:
+// liveCheck holds what a node runs now against the budget it is paid from (w: its
+// model hash, lowest GPU grade, and TPM / Name-service conditions). It returns ""
+// when the node fits, otherwise why not:
 //
 //	model      none of its running LLMs is the budget's model
 //	extra LLM  one is, and another LLM runs next to it
 //	GPU grade  its GPU memory is below the grade the budget asks for
+//	TPM        the budget asks for a TPM-verified node and the node says it is not
+//	name       the budget asks for a Name-service subdomain and the node says it has none
 //
 // Only LLM services count, so an image engine alongside is fine. An LLM with no
-// model hash is a stopped engine and is left out. A pure function.
-func liveCheck(info NodeProbeInfo, model string, minGrade int) string {
-	want := strings.ToLower(strings.TrimSpace(model))
-	if m, err := faucet.ModelFromReport(model); err == nil {
+// model hash is a stopped engine and is left out. TPM and name are refused only on an
+// answer of false: a node that does not report the field is not turned away for it
+// (the RV's check stands), like a node with no door. A pure function.
+func liveCheck(info NodeProbeInfo, w liveWant) string {
+	want := strings.ToLower(strings.TrimSpace(w.Model))
+	if m, err := faucet.ModelFromReport(w.Model); err == nil {
 		want = m
 	}
 	matching, others := 0, 0
@@ -166,8 +196,14 @@ func liveCheck(info NodeProbeInfo, model string, minGrade int) string {
 	if others > 0 {
 		return liveExtraLLM
 	}
-	if min := clampMinGrade(minGrade); min > 0 && gpuGrade(info.memoryGB()) < min {
+	if min := clampMinGrade(w.MinGrade); min > 0 && gpuGrade(info.memoryGB()) < min {
 		return liveGPUGrade
+	}
+	if w.RequireTPM && info.TPMVerified != nil && !*info.TPMVerified {
+		return liveTPM
+	}
+	if w.RequireNamed && info.Named != nil && !*info.Named {
+		return liveNamed
 	}
 	return ""
 }

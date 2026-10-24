@@ -6,6 +6,7 @@ package probe
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,17 +79,113 @@ func TestLiveCheck(t *testing.T) {
 		{"a negative grade is no limit", NodeProbeInfo{Services: []ProbeInfoService{llm(mine)}}, -3, ""},
 	}
 	for _, c := range cases {
-		if got := liveCheck(c.info, budget, c.minGrade); got != c.want {
+		if got := liveCheck(c.info, liveWant{Model: budget, MinGrade: c.minGrade}); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 	// A budget model that cannot be read matches nothing.
-	if got := liveCheck(NodeProbeInfo{Services: []ProbeInfoService{llm(mine)}}, "not a hash", 0); got != liveModel {
+	if got := liveCheck(NodeProbeInfo{Services: []ProbeInfoService{llm(mine)}}, liveWant{Model: "not a hash"}); got != liveModel {
 		t.Errorf("an unreadable budget model: %q, want %q", got, liveModel)
 	}
 	// The budget's model in the report spelling matches too.
-	if got := liveCheck(NodeProbeInfo{Services: []ProbeInfoService{llm(mine)}}, mine, 0); got != "" {
+	if got := liveCheck(NodeProbeInfo{Services: []ProbeInfoService{llm(mine)}}, liveWant{Model: mine}); got != "" {
 		t.Errorf("the budget model as sha256:...: %q, want a fit", got)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// The budget's TPM and Name-service conditions: refused only when the group asks AND
+// the node says false. A node that does not report the field is left to the RV's
+// check, like a node with no door.
+func TestLiveCheckTPMAndName(t *testing.T) {
+	budget := "0x" + qwen14Hex
+	mine := "sha256:" + qwen14Hex
+	fit := func(tpm, named *bool) NodeProbeInfo {
+		return NodeProbeInfo{Services: []ProbeInfoService{llm(mine)},
+			GPUs: []ProbeInfoGPU{gpu("NVIDIA GeForce RTX 4090", 24)}, TPMVerified: tpm, Named: named}
+	}
+	yes, no := boolPtr(true), boolPtr(false)
+	cases := []struct {
+		name string
+		info NodeProbeInfo
+		w    liveWant
+		want string
+	}{
+		{"TPM asked, reported false", fit(no, nil), liveWant{RequireTPM: true}, liveTPM},
+		{"TPM asked, reported true", fit(yes, nil), liveWant{RequireTPM: true}, ""},
+		{"TPM asked, not reported", fit(nil, nil), liveWant{RequireTPM: true}, ""},
+		{"TPM not asked, reported false", fit(no, nil), liveWant{}, ""},
+		{"TPM not asked, not reported", fit(nil, nil), liveWant{}, ""},
+
+		{"name asked, reported false", fit(nil, no), liveWant{RequireNamed: true}, liveNamed},
+		{"name asked, reported true", fit(nil, yes), liveWant{RequireNamed: true}, ""},
+		{"name asked, not reported", fit(nil, nil), liveWant{RequireNamed: true}, ""},
+		{"name not asked, reported false", fit(nil, no), liveWant{}, ""},
+
+		{"both asked, both true", fit(yes, yes), liveWant{RequireTPM: true, RequireNamed: true}, ""},
+		{"both asked, both false says TPM first", fit(no, no), liveWant{RequireTPM: true, RequireNamed: true}, liveTPM},
+		{"both asked, TPM true, name false", fit(yes, no), liveWant{RequireTPM: true, RequireNamed: true}, liveNamed},
+		{"both asked, TPM false, name true", fit(no, yes), liveWant{RequireTPM: true, RequireNamed: true}, liveTPM},
+		{"both asked, TPM not reported, name false", fit(nil, no), liveWant{RequireTPM: true, RequireNamed: true}, liveNamed},
+		{"only the asked one counts", fit(no, yes), liveWant{RequireNamed: true}, ""},
+
+		// They come after the model, LLM and GPU rules.
+		{"another model is said before TPM", NodeProbeInfo{Services: []ProbeInfoService{llm(otherModel)}, TPMVerified: no},
+			liveWant{RequireTPM: true}, liveModel},
+		{"a GPU below the grade is said before TPM", fit(no, no), liveWant{MinGrade: 8, RequireTPM: true}, liveGPUGrade},
+		{"a GPU below the grade is said before name", fit(nil, no), liveWant{MinGrade: 8, RequireNamed: true}, liveGPUGrade},
+	}
+	for _, c := range cases {
+		w := c.w
+		w.Model = budget
+		if got := liveCheck(c.info, w); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// tpm_verified and named are optional in the /probe/info body: absent is nil, not
+// false.
+func TestProbeInfoReadsTPMAndNamedAsOptional(t *testing.T) {
+	door := &doorServer{reply: func(node string) (int, any) {
+		switch node {
+		case "S:true":
+			return http.StatusOK, `{"services":[],"gpus":[],"ram_gb":0,"tpm_verified":true,"named":true}`
+		case "S:false":
+			return http.StatusOK, `{"services":[],"gpus":[],"ram_gb":0,"tpm_verified":false,"named":false}`
+		case "S:old":
+			return http.StatusOK, `{"services":[],"gpus":[],"ram_gb":0}`
+		}
+		return http.StatusTeapot, nil
+	}}
+	srv := httptest.NewServer(door)
+	t.Cleanup(srv.Close)
+	f := NewFirer(srv.URL)
+	show := func(b *bool) string {
+		if b == nil {
+			return "absent"
+		}
+		return fmt.Sprint(*b)
+	}
+	for _, c := range []struct {
+		node       string
+		tpm, named string
+	}{
+		{"S:true", "true", "true"},
+		{"S:false", "false", "false"},
+		{"S:old", "absent", "absent"},
+	} {
+		info, err := f.ProbeInfo(c.node)
+		if err != nil {
+			t.Fatalf("%s: %v", c.node, err)
+		}
+		if got := show(info.TPMVerified); got != c.tpm {
+			t.Errorf("%s: tpm_verified read as %s, want %s", c.node, got, c.tpm)
+		}
+		if got := show(info.Named); got != c.named {
+			t.Errorf("%s: named read as %s, want %s", c.node, got, c.named)
+		}
 	}
 }
 
@@ -348,6 +445,74 @@ func TestSettleLooksAtWhatTheNodeRunsNow(t *testing.T) {
 	}
 }
 
+// 🔴 A budget that asks for TPM and a Name-service subdomain: a node that says it has
+// neither gets no ticket; one that says yes, one that does not report the field and
+// one with no door keep the check the RV made. The same nodes under a group that asks
+// for nothing are all paid.
+func TestSettleHonoursTPMAndNamedConditions(t *testing.T) {
+	yes, no := boolPtr(true), boolPtr(false)
+	build := func(requireTPM, requireNamed bool) (*Prober, *[]string) {
+		var p *Prober
+		door := &doorServer{}
+		door.reply = func(node string) (int, any) {
+			idx := -1
+			for i, tg := range p.targets {
+				if node == tg.Node.ID {
+					idx = i
+				}
+			}
+			info := okInfo(24)
+			switch idx {
+			case 0: // both verified
+				info.TPMVerified, info.Named = yes, yes
+			case 1: // no TPM
+				info.TPMVerified, info.Named = no, yes
+			case 2: // no subdomain
+				info.TPMVerified, info.Named = yes, no
+			case 3: // an isannd that sends neither field
+			case 4:
+				return http.StatusNotFound, "not found" // an older isannd
+			default:
+				return http.StatusTeapot, nil
+			}
+			return http.StatusOK, info
+		}
+		p = livePlanned(t, 5, 7, door)
+		g := &p.assign.Groups[0]
+		g.RequireTPM, g.RequireNamed = requireTPM, requireNamed
+		var issued []string
+		issuedBy(p, &issued)
+		quizBoth(t, p, 0, 1, 2, 3, 4)
+		p.settleTickets(settleAt())
+		return p, &issued
+	}
+
+	p, issued := build(true, true)
+	if got, want := sortedIDs(*issued), nodeIDs(p, 0, 3, 4); got != want {
+		t.Errorf("issued %v, want nodes 0, 3 and 4 (verified and named, nothing reported, no door)", *issued)
+	}
+	for i, want := range []string{DecisionWin, DecisionLose, DecisionLose, DecisionWin, DecisionWin} {
+		if got := decisionOf(t, p, i); got != want {
+			t.Errorf("both asked: node %d's record = %q, want %q", i, got, want)
+		}
+	}
+
+	p, issued = build(true, false)
+	if got, want := sortedIDs(*issued), nodeIDs(p, 0, 2, 3, 4); got != want {
+		t.Errorf("TPM only: issued %v, want nodes 0, 2, 3 and 4", *issued)
+	}
+
+	p, issued = build(false, true)
+	if got, want := sortedIDs(*issued), nodeIDs(p, 0, 1, 3, 4); got != want {
+		t.Errorf("name only: issued %v, want nodes 0, 1, 3 and 4", *issued)
+	}
+
+	p, issued = build(false, false)
+	if got, want := sortedIDs(*issued), nodeIDs(p, 0, 1, 2, 3, 4); got != want {
+		t.Errorf("nothing asked: issued %v, want all five", *issued)
+	}
+}
+
 // A system budget (no model) and a slot from an older RV are not asked: nothing
 // registered them for a model.
 func TestSettleDoesNotLookAtASystemGroup(t *testing.T) {
@@ -356,6 +521,10 @@ func TestSettleDoesNotLookAtASystemGroup(t *testing.T) {
 		shape func(g *AssignGroup)
 	}{
 		{"system budget", func(g *AssignGroup) { g.Mode, g.BudgetID, g.Model = ModeQuiz, 1, "" }},
+		{"system budget with the conditions set", func(g *AssignGroup) {
+			g.Mode, g.BudgetID, g.Model = ModeQuiz, 1, ""
+			g.RequireTPM, g.RequireNamed = true, true
+		}},
 		{"an older RV, no mode", func(g *AssignGroup) { *g = AssignGroup{Members: g.Members} }},
 	} {
 		door := &doorServer{reply: func(string) (int, any) { return http.StatusOK, NodeProbeInfo{Services: []ProbeInfoService{}} }}
@@ -457,5 +626,55 @@ func TestAssignGroupReadsTheNewShapeAndIgnoresTheOld(t *testing.T) {
 	}
 	if !(Assignment{Groups: []AssignGroup{g}}).Planned() {
 		t.Error("a group with mode quiz does not read as planned")
+	}
+	// Neither of the two optional conditions is in this group, as from an older RV.
+	if g.RequireTPM || g.RequireNamed || bare.RequireTPM || bare.RequireNamed {
+		t.Errorf("a group without require_tpm / require_named asks for them: %+v, %+v", g, bare)
+	}
+}
+
+// require_tpm and require_named are read when the RV sends them, are false when it
+// does not, and are left out of the JSON when false.
+func TestAssignGroupReadsTPMAndNamedConditions(t *testing.T) {
+	var both, tpm, named, none AssignGroup
+	for body, g := range map[string]*AssignGroup{
+		`{"members":["0xa"],"budget_id":2,"model":"0x11","mode":"quiz","require_tpm":true,"require_named":true}`: &both,
+		`{"members":["0xa"],"budget_id":2,"model":"0x11","mode":"quiz","require_tpm":true}`:                      &tpm,
+		`{"members":["0xa"],"budget_id":2,"model":"0x11","mode":"quiz","require_named":true}`:                    &named,
+		`{"members":["0xa"],"budget_id":2,"model":"0x11","mode":"quiz","min_grade":7}`:                           &none,
+	} {
+		if err := json.Unmarshal([]byte(body), g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name       string
+		g          AssignGroup
+		tpm, named bool
+	}{
+		{"both", both, true, true}, {"TPM only", tpm, true, false},
+		{"name only", named, false, true}, {"an old group", none, false, false},
+	} {
+		if c.g.RequireTPM != c.tpm || c.g.RequireNamed != c.named {
+			t.Errorf("%s: require_tpm %v, require_named %v, want %v, %v", c.name, c.g.RequireTPM, c.g.RequireNamed, c.tpm, c.named)
+		}
+		if w := c.g.liveWant(); w.RequireTPM != c.tpm || w.RequireNamed != c.named || w.Model != "0x11" {
+			t.Errorf("%s: liveWant = %+v", c.name, w)
+		}
+	}
+	// Written back, the names are the RV's and a false value is not written.
+	out, err := json.Marshal(both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"require_tpm":true`) || !strings.Contains(string(out), `"require_named":true`) {
+		t.Errorf("group written as %s, want require_tpm and require_named", out)
+	}
+	out, err = json.Marshal(none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "require_") {
+		t.Errorf("an old group written as %s, want no require_ fields", out)
 	}
 }

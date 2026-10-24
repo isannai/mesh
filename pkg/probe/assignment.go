@@ -56,11 +56,17 @@ type AssignGroup struct {
 	//	          absent means no limit. Only a budget with a model sets it.
 	//	Mode      "quiz" from a planning RV, empty from an older one (CheckMode)
 	//	MetaHash  the budget's meta hash, kept as the RV sends it
-	BudgetID uint64 `json:"budget_id,omitempty"`
-	Model    string `json:"model,omitempty"`
-	MinGrade int    `json:"min_grade,omitempty"`
-	Mode     string `json:"mode,omitempty"`
-	MetaHash string `json:"meta_hash,omitempty"`
+	//	RequireTPM    only TPM-verified nodes may be paid from the budget; absent means
+	//	              no requirement (an older RV sends neither this nor RequireNamed)
+	//	RequireNamed  only nodes with a live Name-service subdomain may be paid from
+	//	              the budget; absent means no requirement
+	BudgetID     uint64 `json:"budget_id,omitempty"`
+	Model        string `json:"model,omitempty"`
+	MinGrade     int    `json:"min_grade,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	MetaHash     string `json:"meta_hash,omitempty"`
+	RequireTPM   bool   `json:"require_tpm,omitempty"`
+	RequireNamed bool   `json:"require_named,omitempty"`
 }
 
 // ModeQuiz is the one way a group is checked now: the quiz (quiz.go). The RV used
